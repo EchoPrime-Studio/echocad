@@ -51,7 +51,7 @@ A paid edition adds the parts that map a drawing's *meaning* into a GIS schema:
 
 Pro installs as a **separate plugin** (`echocad_pro`), so it never collides with this one on updates. You can keep both installed; the menus are named differently.
 
-It is sold as a perpetual licence with a separate annual update subscription — the version you bought keeps working after the subscription ends. See the [project homepage](https://gitlab.com/spiegel/echocad).
+It is sold as a perpetual licence with a separate annual update subscription — the version you bought keeps working after the subscription ends. See the [project homepage](https://github.com/EchoPrime-Studio/echocad).
 
 ## Licence
 
