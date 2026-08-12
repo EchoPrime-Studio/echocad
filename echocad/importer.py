@@ -26,7 +26,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtXml import QDomDocument
 
-from . import dxfenc, engine, linetypes, names, outliers, styles
+from . import dxfenc, engine, linetypes, names, outliers, styles, xrefs
 from .gdalopts import dxf_options
 
 try:
@@ -124,6 +124,7 @@ def import_dwg(
         dropped = _drop_broken_geometries(layers)
         _apply_cad_colors(layers)
         _enable_text_labels(layers)
+        absent_refs = xrefs.missing(converted.dxf, dwg)
 
         block_layers = []
         if extract_attribs and pro_attribs is not None and pro.unlocked():
@@ -158,7 +159,10 @@ def import_dwg(
     return ImportResult(
         file=dwg.name,
         status="ok",
-        note=f"좌표가 깨진 피처 {dropped}개를 제외했습니다" if dropped else "",
+        note=" / ".join(filter(None, [
+            f"좌표가 깨진 피처 {dropped}개를 제외했습니다" if dropped else "",
+            xrefs.note(absent_refs),
+        ])),
         layers=results,
         total_features=sum(r.feature_count for r in results),
         dropped_features=dropped,

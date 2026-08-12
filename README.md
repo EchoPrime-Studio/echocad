@@ -16,7 +16,9 @@ Supported drawing formats are **R14 and newer**. R13 and older are rejected up f
 
 ## Installing
 
-Install from the QGIS Plugin Manager, or download a release and use *Plugins → Manage and Install Plugins → Install from ZIP*.
+Install from the QGIS Plugin Manager, or download `echocad-<version>.zip` from the releases and use *Plugins → Manage and Install Plugins → Install from ZIP*.
+
+Requires QGIS 3.34 LTR or newer. Windows and macOS are the supported platforms.
 
 ## The DWG converter
 
@@ -35,18 +37,21 @@ Linux is not an officially supported platform for now, because LibreDWG is not i
 ## Known limits
 
 - Hatch **patterns** are not reproduced; hatches come through as solid fills, because the underlying reader only exposes the fill colour.
-- External references (XREF) to missing files are skipped.
-- Features with obviously broken coordinates are dropped, and the count is reported. Some drawings contain a handful of entities at absurd coordinates that would otherwise make the whole drawing appear empty.
+- External references (XREF) whose target file is missing are skipped — the import still completes and the missing file names are listed in the result, so you know why part of the drawing is absent.
+- Features with obviously broken coordinates are dropped and the count is reported. Some drawings carry a handful of entities at absurd coordinates (10¹⁴ and beyond) that would otherwise make the whole drawing render as an empty page.
+- Line weight is only applied where the drawing actually specifies it. Many drawings leave it at "default".
 
 ## EchoCad Pro
 
 A paid edition adds the parts that map a drawing's *meaning* into a GIS schema:
 
-- Block attributes (`ATTRIB`) extracted into queryable attribute fields
-- Mapping profiles — rules that merge CAD layers into your own feature classes
-- Coordinate system suggestions, batch conversion with a report
+- Block attributes (`ATTRIB`) extracted into queryable attribute fields — the thing QGIS's own DWG import has not done since 2024
+- Mapping profiles — rules that merge several CAD layers into one of your feature classes, saved as a JSON file you can share and version
+- Coordinate system suggestions from the drawing's extents, batch folder conversion with a per-file report
 
-It is sold as a perpetual licence with a separate annual update subscription. See the [project homepage](https://gitlab.com/spiegel/echocad).
+Pro installs as a **separate plugin** (`echocad_pro`), so it never collides with this one on updates. You can keep both installed; the menus are named differently.
+
+It is sold as a perpetual licence with a separate annual update subscription — the version you bought keeps working after the subscription ends. See the [project homepage](https://gitlab.com/spiegel/echocad).
 
 ## Licence
 

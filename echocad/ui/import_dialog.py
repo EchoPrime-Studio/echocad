@@ -1,9 +1,11 @@
 # DWG 한 장을 QGIS로 가져오는 다이얼로그. 파일·좌표계·출력만 받고 나머지는 importer가 한다
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 
-from qgis.core import QgsProject
+from qgis.core import QgsCoordinateReferenceSystem, QgsProject
 from qgis.gui import QgsProjectionSelectionWidget
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
@@ -57,9 +59,12 @@ class ImportDialog(QDialog):
         layout.addLayout(source)
 
         layout.addWidget(QLabel("좌표계"))
+        crs_row = QHBoxLayout()
         self.crs_widget = QgsProjectionSelectionWidget()
         self.crs_widget.setCrs(QgsProject.instance().crs())
-        layout.addWidget(self.crs_widget)
+        crs_row.addWidget(self.crs_widget)
+        self._add_crs_suggest_button(crs_row)
+        layout.addLayout(crs_row)
 
         self.save_check = QCheckBox("GeoPackage로 저장 (체크 해제 시 임시 레이어)")
         layout.addWidget(self.save_check)
@@ -89,6 +94,51 @@ class ImportDialog(QDialog):
         layout.addWidget(self.buttons)
 
         self._feedback: _DialogFeedback | None = None
+
+    def _add_crs_suggest_button(self, row):
+        """좌표계 추천 버튼. Community 빌드에는 만들지 않는다."""
+        try:
+            from ..pro import crs as crs_rules
+            from ..pro.crs_dialog import CrsChoiceDialog
+        except ImportError:
+            return
+        self._crs_rules = crs_rules
+        self._crs_dialog = CrsChoiceDialog
+
+        button = QPushButton("추천…")
+        button.setToolTip("도면 좌표 범위로 좌표계 후보를 찾습니다")
+        button.clicked.connect(self._suggest_crs)
+        row.addWidget(button)
+
+    def _suggest_crs(self):
+        source = self.source_edit.text().strip()
+        if not source:
+            QMessageBox.warning(self, "파일 없음", "먼저 DWG 파일을 지정하세요.")
+            return
+        try:
+            exe = resolve_engine()
+        except engine.EngineNotFound as err:
+            QMessageBox.warning(self, "변환 엔진 없음", str(err))
+            return
+
+        # 좌표 범위는 변환된 DXF 헤더에만 있다. 사용자가 버튼을 눌러 요청한
+        # 것이므로 한 번 더 변환하는 비용은 감수한다.
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        work = Path(tempfile.mkdtemp(prefix="echocad-crs-"))
+        try:
+            converted = engine.convert(Path(source), work / "probe.dxf", exe=exe)
+            extents = self._crs_rules.read_extents(converted.dxf) if converted.status == "ok" else None
+        finally:
+            QApplication.restoreOverrideCursor()
+            shutil.rmtree(work, ignore_errors=True)
+
+        if converted.status != "ok":
+            QMessageBox.warning(self, "읽지 못했습니다", converted.note or converted.status)
+            return
+
+        dialog = self._crs_dialog(self._crs_rules.suggest(extents), self)
+        if dialog.exec_() == QDialog.Accepted and dialog.chosen:
+            self.crs_widget.setCrs(QgsCoordinateReferenceSystem(dialog.chosen))
 
     def _profile_row(self, layout):
         """매핑 프로파일 선택. Community 빌드에는 아예 만들지 않는다."""
