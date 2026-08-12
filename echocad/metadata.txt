@@ -1,0 +1,23 @@
+[general]
+name=EchoCad
+qgisMinimumVersion=3.34
+description=Import AutoCAD DWG drawings into QGIS, keeping CAD layers, colours, line types and text.
+about=EchoCad converts DWG drawings by calling LibreDWG's dwg2dxf as a separate process, so no CAD library is bundled with the plugin. The converter is not included: on first run the plugin shows how to obtain it for your platform, or you can point it at an existing installation. Each CAD layer becomes its own QGIS layer, and entity colour, line type, line width and text (size, rotation, colour) are carried over. Supported formats are R14 and newer. Everything runs locally - drawings never leave your machine.
+version=0.1.0
+author=All4Land
+email=echoprime.studio@gmail.com
+homepage=https://gitlab.com/spiegel/echocad
+tracker=https://gitlab.com/spiegel/echocad/-/issues
+repository=https://gitlab.com/spiegel/echocad
+icon=icon.png
+license=GPL-2.0-or-later
+tags=dwg,dxf,cad,autocad,import,conversion,drawing
+category=Vector
+experimental=False
+deprecated=False
+changelog=0.1.0
+    First release.
+    - Import DWG (R14 and newer) as one QGIS layer per CAD layer
+    - Carry over colour, line type, line width and text size/rotation/colour
+    - Guided setup for the DWG converter, with SHA-256 verified download on Windows
+    - Optional GeoPackage output
