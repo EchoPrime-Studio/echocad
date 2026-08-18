@@ -9,11 +9,15 @@ from pathlib import Path
 
 from osgeo import ogr
 from qgis.core import (
+    Qgis,
+    QgsCategorizedSymbolRenderer,
     QgsFeature,
+    QgsFillSymbol,
     QgsGeometry,
     QgsPalLayerSettings,
     QgsProject,
     QgsProperty,
+    QgsRendererCategory,
     QgsSingleSymbolRenderer,
     QgsSymbol,
     QgsSymbolLayer,
@@ -24,9 +28,10 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsWkbTypes,
 )
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtXml import QDomDocument
 
-from . import dxfenc, engine, linetypes, names, outliers, styles, xrefs
+from . import dxfenc, engine, hatches, linetypes, names, outliers, styles, xrefs
 from .gdalopts import dxf_options
 
 try:
@@ -48,7 +53,7 @@ _FIELDS = (
     "&field=cad_layer:string"
     "&field=text:string"
     "&field=color:string"
-    "&field=fill_color:string"
+    "&field=fill_color:string&field=hatch:string"
     "&field=stroke_style:string"
     "&field=stroke_width:double"
     "&field=text_size:double"
@@ -70,7 +75,7 @@ class LayerResult:
 @dataclass
 class ImportResult:
     file: str
-    status: str  # ok | unsupported | error | timeout | empty
+    status: str  # ok | unsupported | error | timeout | empty | truncated
     note: str = ""
     layers: list[LayerResult] = field(default_factory=list)
     total_features: int = 0
@@ -87,15 +92,22 @@ def import_dwg(
     feedback=None,
     extract_attribs: bool = True,
     profile=None,
+    project=None,
 ) -> tuple[ImportResult, list[QgsVectorLayer]]:
     """DWG 하나를 QGIS 레이어들로 바꾼다.
 
     output_gpkg가 없으면 메모리 레이어를 돌려준다. feedback은 QgsProcessingFeedback과
     같은 모양(setProgress/isCanceled)이면 무엇이든 받는다 — 없으면 무시한다.
     extract_attribs는 Pro 빌드에서만 효과가 있다.
+
+    project는 좌표계와 변환 컨텍스트를 얻을 QgsProject다. Processing은 워커 스레드에서
+    도는데 QgsProject.instance()는 메인 스레드 전용이라, 알고리즘이 context.project()를
+    넘겨 준다 (QgsProcessingAlgorithm 계약). 안 넘기면 지금 프로젝트를 본다.
     """
     dwg = Path(dwg)
     started = time.monotonic()
+    if project is None:
+        project = QgsProject.instance()
 
     work = Path(tempfile.mkdtemp(prefix="echocad-"))
     try:
@@ -104,7 +116,7 @@ def import_dwg(
             return ImportResult(dwg.name, converted.status, converted.note,
                                 elapsed_sec=time.monotonic() - started), []
 
-        crs_id = crs or QgsProject.instance().crs().authid()
+        crs_id = crs or project.crs().authid()
         # 헤더 선언이 아니라 실제 바이트로 인코딩을 정한다. 한 번만 본다.
         utf8 = dxfenc.content_is_utf8(converted.dxf)
 
@@ -146,7 +158,7 @@ def import_dwg(
     if output_gpkg is not None:
         # 저장했으면 저장된 것을 돌려준다. 메모리 레이어를 돌려주면 프로젝트를
         # 저장했다가 다시 열었을 때 레이어가 전부 비어 있다.
-        produced = _write_gpkg(produced, Path(output_gpkg))
+        produced = _write_gpkg(produced, Path(output_gpkg), project)
 
     results = [
         LayerResult(layer.name(), source, geometry, layer.featureCount())
@@ -188,12 +200,13 @@ def _split_by_cad_layer(dxf: Path, crs_id: str, feedback, profile=None, unmatche
         return None
     entities = source.GetLayer(0)
     linetype_table = linetypes.read(dxf)
+    hatch_table = hatches.read(dxf)
     buckets: dict[tuple[str, str], QgsVectorLayer] = {}
     taken: set[str] = set()
 
     try:
-        _fill_buckets(entities, buckets, taken, linetype_table, crs_id, feedback,
-                      profile, unmatched if unmatched is not None else [])
+        _fill_buckets(entities, buckets, taken, linetype_table, hatch_table, crs_id,
+                      feedback, profile, unmatched if unmatched is not None else [])
     finally:
         # OGR가 DXF를 붙들고 있으면 Windows에서 임시 파일이 안 지워진다.
         # 취소로 빠져나갈 때도 반드시 놓아야 한다.
@@ -202,8 +215,8 @@ def _split_by_cad_layer(dxf: Path, crs_id: str, feedback, profile=None, unmatche
     return buckets
 
 
-def _fill_buckets(entities, buckets, taken, linetype_table, crs_id, feedback,
-                  profile, unmatched) -> None:
+def _fill_buckets(entities, buckets, taken, linetype_table, hatch_table, crs_id,
+                  feedback, profile, unmatched) -> None:
     total = entities.GetFeatureCount() or 1
     seen_unmatched = set()
 
@@ -260,6 +273,7 @@ def _fill_buckets(entities, buckets, taken, linetype_table, crs_id, feedback,
         copied["text"] = text
         copied["color"] = style.color
         copied["fill_color"] = style.fill or ""
+        copied["hatch"] = _hatch_key(hatch_table, feature)
         copied["stroke_style"] = linetype_table.style_of(_field(feature, "Linetype"), cad_layer)
         copied["stroke_width"] = style.width
         copied["text_size"] = style.size
@@ -300,6 +314,115 @@ def _text_of(feature) -> str:
     return str(text)
 
 
+def _hatch_key(hatch_table, feature) -> str:
+    """이 피처가 패턴 채움 해치면 그 모양을 나타내는 분류값, 아니면 빈 문자열.
+
+    핸들로 찾는다 — OGR이 주는 `EntityHandle`이 DXF의 그룹코드 5와 같은 값이다.
+    """
+    if not hatch_table:
+        return ""
+    handle = _field(feature, "EntityHandle")
+    if not handle:
+        return ""
+    hatch = hatch_table.get(str(handle).strip())
+    if hatch is None or hatch.solid:
+        return ""
+    return hatch.key()
+
+
+def _pattern_fill_symbol(families, stroke) -> "QgsFillSymbol | None":
+    """평행선 가족들로 채움 심볼을 만든다. 색은 피처의 CAD 색을 따른다."""
+    try:
+        from qgis.core import QgsLinePatternFillSymbolLayer, QgsSimpleFillSymbolLayer
+    except ImportError:      # 아주 오래된 QGIS. 단색으로 두는 편이 낫다
+        return None
+
+    built = []
+    for family in families:
+        layer = QgsLinePatternFillSymbolLayer()
+        layer.setLineAngle(family.angle)
+        layer.setDistance(family.spacing)
+        layer.setDistanceUnit(QgsUnitTypes.RenderMapUnits)
+        # 선 자체는 가늘게. CAD 해치선은 굵기를 따로 갖지 않는다.
+        layer.setLineWidth(0.2)
+        layer.setLineWidthUnit(QgsUnitTypes.RenderMillimeters)
+        # subSymbol()이 준 포인터를 setSubSymbol로 되돌려주면 이중 해제로 죽는다.
+        # 제자리에서 고친다.
+        sub = layer.subSymbol()
+        if sub is not None:
+            for position in range(sub.symbolLayerCount()):
+                sub.symbolLayer(position).setDataDefinedProperty(
+                    QgsSymbolLayer.PropertyStrokeColor, stroke)
+            if family.dashes:
+                _set_dash_vector(sub, family.dashes)
+        built.append(layer)
+
+    if not built:
+        return None
+
+    # 경계선은 남긴다. 해치만 그리면 도형의 윤곽이 사라진다.
+    outline = QgsSimpleFillSymbolLayer()
+    outline.setBrushStyle(Qt.NoBrush)
+    outline.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeColor, stroke)
+    built.append(outline)
+
+    # QgsFillSymbol()은 레이어가 없는 심볼을 만든다. deleteSymbolLayer(0)을 부르면
+    # 범위를 벗어나 프로세스가 죽는다. 목록을 넘겨 한 번에 만든다.
+    return QgsFillSymbol(built)
+
+
+def _set_dash_vector(line_symbol, dashes) -> None:
+    """대시 길이를 선 심볼에 넣는다. 실패해도 실선으로 그리면 되므로 조용히 넘어간다."""
+    values = [max(v, 0.05) for v in dashes]
+    if len(values) % 2:
+        values = values + values      # 홀수면 그리기/띄우기 쌍이 안 맞는다
+    for position in range(line_symbol.symbolLayerCount()):
+        layer = line_symbol.symbolLayer(position)
+        if hasattr(layer, "setUseCustomDashPattern"):
+            layer.setUseCustomDashPattern(True)
+            layer.setCustomDashVector(values)
+            if hasattr(layer, "setCustomDashPatternUnit"):
+                layer.setCustomDashPatternUnit(QgsUnitTypes.RenderMapUnits)
+
+
+def _apply_hatch_patterns(layer, base_symbol, stroke) -> bool:
+    """이 레이어에 패턴 해치가 있으면 분류 렌더러로 바꾼다.
+
+    채움 패턴은 심볼 레이어의 구조라 표현식으로 못 바꾼다. 그래서 모양마다 분류를
+    만든다. 실측상 한 레이어의 서로 다른 조합은 많아야 스물 몇 개다.
+    """
+    index = layer.fields().indexOf("hatch")
+    if index < 0:
+        return False
+    keys = {value for value in layer.uniqueValues(index) if value}
+    if not keys:
+        return False
+
+    categories = [QgsRendererCategory("", base_symbol.clone(), "채움 없음")]
+    for key in sorted(keys):
+        families = _families_from_key(key)
+        symbol = _pattern_fill_symbol(families, stroke) if families else None
+        categories.append(QgsRendererCategory(
+            key, symbol or base_symbol.clone(), key.split("|")[0]))
+
+    layer.setRenderer(QgsCategorizedSymbolRenderer("hatch", categories))
+    return True
+
+
+def _families_from_key(key: str):
+    """`_hatch_key`가 만든 문자열을 다시 가족 목록으로. 피처마다 원본을 들고 다니지
+    않으려고 분류값 자체에 모양을 담았다."""
+    parts = key.split("|")[1:]
+    families = []
+    for part in parts:
+        angle, _, spacing = part.partition("/")
+        try:
+            families.append(hatches.Family(angle=float(angle), spacing=float(spacing)))
+        except ValueError:
+            return []
+    return families
+
+
 def _apply_cad_colors(buckets) -> None:
     """피처마다 저장해 둔 CAD 색으로 그리게 한다.
 
@@ -335,19 +458,30 @@ def _apply_cad_colors(buckets) -> None:
                 symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyFillColor, stroke)
             if layer.geometryType() != QgsWkbTypes.PointGeometry:
                 symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth, width)
-                _use_map_units(symbol_layer)
+                _use_lineweight_units(symbol_layer)
             if layer.geometryType() == QgsWkbTypes.LineGeometry:
                 symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeStyle, dash)
             if layer.geometryType() == QgsWkbTypes.PointGeometry:
                 symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertySize, marker_size)
+        if layer.geometryType() == QgsWkbTypes.PolygonGeometry and                 _apply_hatch_patterns(layer, symbol, stroke):
+            continue
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
 
-def _use_map_units(symbol_layer) -> None:
-    """선 폭 단위를 도면 단위로 맞춘다. 클래스마다 설정 함수 이름이 다르다."""
+def _use_lineweight_units(symbol_layer) -> None:
+    """선 폭 단위를 밀리미터로 맞춘다. 클래스마다 설정 함수 이름이 다르다.
+
+    CAD 선폭(DXF 그룹코드 370)은 1/100mm 단위의 **출력 폭**이지 도면 위의 길이가 아니다.
+    2026-08-17 실측 — 표본의 370 값이 13·15·35·40·50이고 GDAL은 이를 100으로 나눈
+    `w:0.13g`로 내보낸다. 접미가 g(ground)라도 숫자는 밀리미터다.
+
+    도면 단위로 잡으면 미터 기준 좌표계(EPSG:5186 등)에서 0.5가 지상 500mm가 되어
+    1:1000 축척에서 도면이 검은 띠로 뭉개진다. 글자 높이(그룹코드 40)는 실제로 도면
+    단위라 그쪽은 RenderMapUnits가 맞다 — 성격이 다르므로 같이 묶지 않는다.
+    """
     for setter in ("setWidthUnit", "setStrokeWidthUnit"):
         if hasattr(symbol_layer, setter):
-            getattr(symbol_layer, setter)(QgsUnitTypes.RenderMapUnits)
+            getattr(symbol_layer, setter)(QgsUnitTypes.RenderMillimeters)
             return
 
 
@@ -368,7 +502,10 @@ def _enable_text_labels(buckets) -> None:
 
         settings = QgsPalLayerSettings()
         settings.fieldName = "text"
-        settings.placement = QgsPalLayerSettings.OverPoint
+        # QgsPalLayerSettings.OverPoint를 쓰면 안 된다. 같은 이름이 다른 열거형
+        # (LabelPredefinedPointPosition)에도 있어서 import는 되고 대입에서 TypeError가 난다.
+        # 2026-08-17 실측 — QGIS 3.44.13과 4.2.1 양쪽에서 재현되고, 아래 형태는 양쪽 다 통과한다.
+        settings.placement = Qgis.LabelPlacement.OverPoint
         settings.offsetUnits = QgsUnitTypes.RenderMapUnits
         # CAD는 글자가 겹쳐도 전부 그린다. QGIS 기본값은 겹치면 숨기므로 끈다.
         settings.displayAll = True
@@ -397,7 +534,14 @@ def _drop_broken_geometries(buckets) -> int:
     centers = []
     for layer in buckets.values():
         for feature in layer.getFeatures():
-            point = feature.geometry().centroid().asPoint()
+            # 빈 지오메트리는 중심점이 나오지 않는다. 그대로 asPoint()를 부르면
+            # ValueError가 import_dwg 밖으로 튀어 QGIS 오류 창이 뜬다
+            # (2026-08-17 맥 QGIS 4.2.1 실측 — acadsharp-r2000.dwg의 MultiPolygon EMPTY).
+            # 좌표 이상치 판정 대상이 아니므로 건너뛴다.
+            center = feature.geometry().centroid()
+            if center.isNull():
+                continue
+            point = center.asPoint()
             owners.append((layer, feature.id()))
             centers.append((point.x(), point.y()))
 
@@ -415,24 +559,22 @@ def _drop_broken_geometries(buckets) -> int:
 
 
 def _new_memory_layer(cad_layer: str, suffix: str, wkb_name: str, crs_id: str, taken: set[str]):
-    base = f"{names.sanitize(cad_layer)}_{suffix}"
-    name, n = base, 1
-    while name in taken:
-        n += 1
-        name = f"{base}_{n}"
-    taken.add(name)
+    # 이름 짓는 규칙은 names.unique_name 하나만 쓴다. 여기서 루프를 따로 돌리면
+    # 대소문자 처리 같은 수정이 한쪽에만 반영된다.
+    name = names.unique_name(f"{names.sanitize(cad_layer)}_{suffix}", taken)
 
     return QgsVectorLayer(f"{wkb_name}?crs={crs_id}{_FIELDS}", name, "memory")
 
 
-def _write_gpkg(layers: list, gpkg: Path) -> list:
+def _write_gpkg(layers: list, gpkg: Path, project=None) -> list:
     """레이어들을 GeoPackage에 쓰고, 그 파일을 읽는 레이어들을 돌려준다.
 
     첫 레이어에서 파일을 새로 만든다. 이어 붙이면 지난 임포트의 레이어가 남아
     이번 결과와 구분되지 않는다.
     """
     gpkg.parent.mkdir(parents=True, exist_ok=True)
-    context = QgsProject.instance().transformContext()
+    # 워커 스레드에서 QgsProject.instance()를 만지면 안 된다. import_dwg가 넘겨 준다.
+    context = (project or QgsProject.instance()).transformContext()
     first = True
     saved = []
 

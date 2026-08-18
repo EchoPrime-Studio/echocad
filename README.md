@@ -9,6 +9,7 @@ Everything runs on your machine. Drawings are never uploaded anywhere.
 - One QGIS layer per CAD layer, split by geometry type
 - Entity colour, line type (solid / dashed / dash-dot) and line width carried over
 - Text drawn at its original size, rotation and colour
+- Hatch patterns rebuilt from the drawing's own definitions, not approximated
 - Optional GeoPackage output
 - Clear failure messages instead of silence — unsupported format, empty drawing, timeout are told apart
 
@@ -24,19 +25,21 @@ Requires QGIS 3.34 LTR or newer. Windows and macOS are the supported platforms.
 
 Reading DWG needs [LibreDWG](https://www.gnu.org/software/libredwg/)'s `dwg2dxf`. It is **not bundled** with this plugin: LibreDWG is GPL-3 and this plugin only calls it as a separate process, so redistributing its binaries here would be wrong.
 
-On first run the plugin shows you how to get it:
+On first run the plugin shows you where to get it and remembers the path you pick:
 
 | Platform | How |
 |---|---|
-| Windows | One click — the plugin downloads the official release and verifies its SHA-256 |
-| macOS | `brew install libredwg` |
+| Windows | Download the win64 zip from the [LibreDWG releases](https://github.com/LibreDWG/libredwg/releases), unpack it, point the plugin at `dwg2dxf.exe` |
+| macOS | Download the universal build from [this project's releases](https://github.com/EchoPrime-Studio/echocad/releases) and point the plugin at it. Execute permission and the quarantine flag are handled for you |
 | Anywhere | Point the plugin at an existing `dwg2dxf` |
+
+On macOS, `brew install libredwg` also works but installs 0.13.3, which truncates some drawings while still reporting success. The build on the releases page is 0.14.8578.
 
 Linux is not an officially supported platform for now, because LibreDWG is not in the major distribution repositories. It works if you build or install `dwg2dxf` yourself and set the path.
 
 ## Known limits
 
-- Hatch **patterns** are not reproduced; hatches come through as solid fills, because the underlying reader only exposes the fill colour.
+- Hatch patterns are rebuilt from the line families the drawing carries, so hatches read correctly. Patterns built from dots or filled shapes rather than lines fall back to a solid fill.
 - External references (XREF) whose target file is missing are skipped — the import still completes and the missing file names are listed in the result, so you know why part of the drawing is absent.
 - Features with obviously broken coordinates are dropped and the count is reported. Some drawings carry a handful of entities at absurd coordinates (10¹⁴ and beyond) that would otherwise make the whole drawing render as an empty page.
 - Line weight is only applied where the drawing actually specifies it. Many drawings leave it at "default".

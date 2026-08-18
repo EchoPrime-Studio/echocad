@@ -28,7 +28,7 @@ DEFAULT_QUADRANT = 2
 @dataclass
 class Style:
     stroke: str | None = None   # 선 색 (#rrggbb)
-    width: float = 0.0          # 선 폭. 도면 단위. 0이면 지정 없음(가는 선)
+    width: float = 0.0          # 선 폭. 밀리미터(출력 폭). 0이면 지정 없음(가는 선)
     fill: str | None = None     # 채움 색
     label_color: str | None = None
     size: float | None = None   # 글자 높이. 도면 단위

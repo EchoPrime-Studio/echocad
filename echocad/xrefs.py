@@ -31,14 +31,28 @@ def referenced_files(dxf: Path) -> list[str]:
     return found
 
 
+def _local_path(reference: str) -> Path:
+    """도면에 적힌 참조 경로를 지금 OS의 경로로 바꾼다.
+
+    AutoCAD는 구분자를 역슬래시로 쓴다. POSIX에서 역슬래시는 구분자가 아니라
+    파일명의 일부라 '.\\STAIR.dwg'가 통째로 한 덩어리 이름이 되고, 도면 바로 옆에
+    파일이 있어도 없다고 판정한다 (2026-08-17 맥 실측 — XREF를 쓴 모든 도면에서
+    오경보가 나 진짜 누락을 무시하게 만든다).
+
+    슬래시는 Windows에서도 구분자로 통하므로 양쪽 OS에서 같은 결과가 나온다.
+    """
+    return Path(reference.replace("\\", "/"))
+
+
 def missing(dxf: Path, source: Path) -> list[str]:
     """참조 중 실제로 없는 파일. 경로는 원본 도면 위치를 기준으로 푼다."""
     base = Path(source).parent
     absent = []
     for reference in referenced_files(dxf):
-        candidate = Path(reference)
+        candidate = _local_path(reference)
         resolved = candidate if candidate.is_absolute() else base / candidate
         if not resolved.exists():
+            # 사용자에게는 도면에 적힌 원래 표기를 그대로 보여 준다.
             absent.append(reference)
     return absent
 

@@ -21,6 +21,7 @@ _STATUS_MESSAGE = {
     "unsupported": "지원하지 않는 도면 포맷입니다. R14 이상 DWG만 읽을 수 있습니다.",
     "timeout": "변환이 제한 시간을 넘겼습니다. 도면이 매우 크거나 손상됐을 수 있습니다.",
     "empty": "변환은 됐지만 그릴 엔티티가 없습니다. 메타데이터 전용 도면일 수 있습니다.",
+    "truncated": "변환이 중간에 끊겨 도면 내용이 통째로 빠졌습니다.",
     "error": "변환에 실패했습니다.",
 }
 
@@ -111,6 +112,19 @@ class ImportDialog(QDialog):
         row.addWidget(button)
 
     def _suggest_crs(self):
+        # 좌표계 자동 판정도 유료 기능으로 광고된다. 버튼은 Pro 빌드에만 생기지만
+        # 그것만으로는 라이선스 검사가 아니다 — 키 없이도 눌리면 그냥 열린 기능이다.
+        from .. import pro
+
+        if not pro.unlocked():
+            from ..pro import license as licensing
+
+            QMessageBox.information(
+                self, "유료판 기능",
+                f"좌표계 자동 판정은 유료판 기능입니다.\n\n{licensing.decide(pro.build_date()).reason}",
+            )
+            return
+
         source = self.source_edit.text().strip()
         if not source:
             QMessageBox.warning(self, "파일 없음", "먼저 DWG 파일을 지정하세요.")

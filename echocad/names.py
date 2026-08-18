@@ -34,12 +34,17 @@ def unique_name(base: str, taken: set[str]) -> str:
 
     레이어명이 겹치면 GeoPackage에 쓸 때 뒤엣것이 앞엣것을 덮어써 조용히 데이터를
     잃는다. 이름을 짓는 곳마다 같은 규칙을 쓰도록 여기 하나로 모았다.
+
+    비교는 대소문자를 접어서 한다. GeoPackage 알맹이는 SQLite라 'WALL'과 'wall'이
+    같은 테이블이고, 대소문자를 따지면 서로 다른 이름을 받고도 결국 덮어쓴다
+    (2026-08-17 실측 — 두 레이어를 넣으면 GeoPackage에 하나만 남고 오류는 없다).
+    그래서 `taken`에는 접은 이름이 들어간다.
     """
     name, n = base, 1
-    while name in taken:
+    while name.casefold() in taken:
         n += 1
         name = f"{base}_{n}"
-    taken.add(name)
+    taken.add(name.casefold())
     return name
 
 
@@ -55,10 +60,11 @@ def make_unique(names: list[str], fallback: str = "layer") -> dict[str, str]:
         if original in mapping:
             continue
         base = sanitize(original, fallback)
+        # 필드명도 SQLite 컬럼이라 대소문자를 구분하지 않는다. unique_name과 같은 이유로 접는다.
         candidate, n = base, 1
-        while candidate in used:
+        while candidate.casefold() in used:
             n += 1
             candidate = f"{base}_{n}"
-        used.add(candidate)
+        used.add(candidate.casefold())
         mapping[original] = candidate
     return mapping

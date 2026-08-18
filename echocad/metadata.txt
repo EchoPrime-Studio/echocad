@@ -1,8 +1,11 @@
 [general]
 name=EchoCad
 qgisMinimumVersion=3.34
-description=Import AutoCAD DWG drawings into QGIS, keeping CAD layers, colours, line types and text.
-about=EchoCad converts DWG drawings by calling LibreDWG's dwg2dxf as a separate process, so no CAD library is bundled with the plugin. The converter is not included: on first run the plugin shows how to obtain it for your platform, or you can point it at an existing installation. Each CAD layer becomes its own QGIS layer, and entity colour, line type, line width and text (size, rotation, colour) are carried over. Supported formats are R14 and newer. Everything runs locally - drawings never leave your machine.
+# 이 줄이 없으면 저장소가 상한을 3.99로 잡아 QGIS 4 사용자에게 플러그인이 보이지 않는다.
+# 2026-08-17 실측 — QGIS 3.44.13과 4.2.1에서 같은 도면이 같은 결과를 낸다.
+qgisMaximumVersion=4.99
+description=Import AutoCAD DWG drawings into QGIS, keeping CAD layers, colours, line types, hatch patterns and text.
+about=EchoCad converts DWG drawings by calling LibreDWG's dwg2dxf as a separate process, so no CAD library is bundled with the plugin. The converter is not included: on first run the plugin shows how to obtain it for your platform, or you can point it at an existing installation. Each CAD layer becomes its own QGIS layer, and entity colour, line type, line width, hatch pattern and text (size, rotation, colour) are carried over. Supported formats are R14 and newer. Everything runs locally - drawings never leave your machine.
 version=0.1.0
 author=EchoPrime Studio
 email=echoprime.studio@gmail.com
@@ -19,5 +22,6 @@ changelog=0.1.0
     First release.
     - Import DWG (R14 and newer) as one QGIS layer per CAD layer
     - Carry over colour, line type, line width and text size/rotation/colour
-    - Guided setup for the DWG converter, with SHA-256 verified download on Windows
+    - Reproduce hatch patterns from the definitions the drawing itself carries
+    - Guided setup for the DWG converter
     - Optional GeoPackage output
