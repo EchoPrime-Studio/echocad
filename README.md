@@ -21,6 +21,11 @@ Install from the QGIS Plugin Manager, or download `echocad-<version>.zip` from t
 
 Requires QGIS 3.34 LTR or newer. Windows and macOS are the supported platforms.
 
+The interface follows your QGIS language. Nine are shipped — English, German, Spanish,
+French, Italian, Japanese, Korean, Polish, Portuguese and Chinese (Simplified).
+Anything not translated falls back to English rather than showing a blank.
+Corrections and new languages are welcome: one JSON file per language in `echocad/translations/`.
+
 ## The DWG converter
 
 Reading DWG needs [LibreDWG](https://www.gnu.org/software/libredwg/)'s `dwg2dxf`. It is **not bundled** with this plugin: LibreDWG is GPL-3 and this plugin only calls it as a separate process, so redistributing its binaries here would be wrong.
