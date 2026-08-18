@@ -10,6 +10,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .. import engine
+from ..i18n import tr
 
 SETTINGS_KEY = "echocad/dwg2dxf_path"
 
@@ -31,13 +32,15 @@ class EngineSetupDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("EchoCad — DWG 변환 엔진 준비")
+        self.setWindowTitle(tr("EchoCad — Set up the DWG converter"))
         self.engine_path: Path | None = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
-            "DWG를 읽으려면 LibreDWG의 dwg2dxf가 필요합니다.\n"
-            "공식 저장소 규칙상 무료판에는 동봉하지 않습니다 — 한 번만 지정하면 계속 쓰입니다."
+            tr("Reading DWG needs LibreDWG's dwg2dxf.")
+            + "\n"
+            + tr("Repository rules keep it out of the free edition — set the path once "
+                 "and it is remembered.")
         ))
 
         hint = QLabel(engine.install_hint())
@@ -48,18 +51,18 @@ class EngineSetupDialog(QDialog):
         # OS를 가리지 않고 같은 흐름이다 — 페이지에서 받아 파일을 고르면 나머지는
         # 플러그인이 한다. 자동 다운로드는 공식 저장소 규칙 때문에 쓰지 않는다.
         actions = QHBoxLayout()
-        download = QPushButton("다운로드 페이지 열기")
+        download = QPushButton(tr("Open the download page"))
         download.clicked.connect(self._open_download_page)
         actions.addWidget(download)
-        copy = QPushButton("안내 복사")
+        copy = QPushButton(tr("Copy the instructions"))
         copy.clicked.connect(lambda: QApplication.clipboard().setText(engine.install_hint()))
         actions.addWidget(copy)
         layout.addLayout(actions)
 
         picker = QHBoxLayout()
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("이미 설치돼 있다면 dwg2dxf 경로를 지정하세요")
-        browse = QPushButton("찾아보기…")
+        self.path_edit.setPlaceholderText(tr("If it is already installed, set the dwg2dxf path"))
+        browse = QPushButton(tr("Browse…"))
         browse.clicked.connect(self._browse)
         picker.addWidget(self.path_edit)
         picker.addWidget(browse)
@@ -71,7 +74,7 @@ class EngineSetupDialog(QDialog):
         layout.addWidget(buttons)
 
     def _browse(self):
-        chosen, _ = QFileDialog.getOpenFileName(self, "dwg2dxf 선택")
+        chosen, _ = QFileDialog.getOpenFileName(self, tr("Choose dwg2dxf"))
         if chosen:
             self.path_edit.setText(chosen)
 
@@ -84,21 +87,22 @@ class EngineSetupDialog(QDialog):
     def _accept_path(self):
         text = self.path_edit.text().strip()
         if not text:
-            QMessageBox.warning(self, "경로 없음", "내려받은 dwg2dxf 경로를 지정하세요.")
+            QMessageBox.warning(self, tr("No path"), tr("Set the path of the dwg2dxf you downloaded."))
             return
         chosen = Path(text)
         if not chosen.exists():
-            QMessageBox.warning(self, "경로 없음", f"그런 파일이 없습니다: {chosen}")
+            QMessageBox.warning(self, tr("No path"), f"{tr('No such file')}: {chosen}")
             return
         try:
             # 권한·격리를 먼저 손봐야 verify_engine이 실행해 볼 수 있다. 맥에서
             # 격리된 채로 실행하면 응답 없이 멈춘다.
             engine.verify_engine(engine.prepare(chosen))
         except engine.EngineInstallError as err:
-            QMessageBox.warning(self, "사용할 수 없는 경로", str(err))
+            QMessageBox.warning(self, tr("Unusable path"), str(err))
             return
         except OSError as err:
-            QMessageBox.warning(self, "준비 실패", f"실행 권한을 줄 수 없습니다: {err}")
+            QMessageBox.warning(self, tr("Setup failed"),
+                                f"{tr('Cannot grant execute permission')}: {err}")
             return
         self._save(chosen)
 

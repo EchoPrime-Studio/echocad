@@ -50,7 +50,7 @@ A paid edition adds the parts that map a drawing's *meaning* into a GIS schema:
 
 - Block attributes (`ATTRIB`) extracted into queryable attribute fields — the thing QGIS's own DWG import has not done since 2024
 - Mapping profiles — rules that merge several CAD layers into one of your feature classes, saved as a JSON file you can share and version
-- Coordinate system suggestions from the drawing's extents, batch folder conversion with a per-file report
+- Batch folder conversion with a per-file report
 
 Pro installs as a **separate plugin** (`echocad_pro`), so it never collides with this one on updates. You can keep both installed; the menus are named differently.
 

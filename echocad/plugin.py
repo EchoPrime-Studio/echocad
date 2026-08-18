@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from qgis.PyQt.QtWidgets import QAction
 
+from .i18n import tr
 from .ui.engine_setup import EngineSetupDialog
 from .ui.import_dialog import ImportDialog
 
@@ -27,14 +28,14 @@ class EchoCadPlugin:
         self.provider = None
 
     def initGui(self):
-        self._add_action("DWG 가져오기…", self._open_import)
-        self._add_action("변환 엔진 설정…", self._open_engine_setup)
+        self._add_action(tr("Import DWG…"), self._open_import)
+        self._add_action(tr("Converter setup…"), self._open_engine_setup)
         # Community 빌드에는 pro/ 폴더가 없어 이 메뉴와 알고리즘이 생기지 않는다.
         try:
             from .pro.algorithms import EchoCadProvider
         except ImportError:
             return
-        self._add_action("라이선스…", self._open_license)
+        self._add_action(tr("Licence…"), self._open_license)
 
         from qgis.core import QgsApplication
 

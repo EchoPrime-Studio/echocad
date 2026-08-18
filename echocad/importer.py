@@ -32,6 +32,7 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtXml import QDomDocument
 
 from . import dxfenc, engine, hatches, linetypes, names, outliers, styles, xrefs
+from .i18n import tr
 from .gdalopts import dxf_options
 
 try:
@@ -130,7 +131,7 @@ def import_dwg(
             layers = _split_by_cad_layer(converted.dxf, crs_id, feedback, profile, unmatched)
 
         if layers is None:
-            return ImportResult(dwg.name, "error", "DXF를 읽지 못했습니다",
+            return ImportResult(dwg.name, "error", tr("Could not read the DXF"),
                                 elapsed_sec=time.monotonic() - started), []
 
         dropped = _drop_broken_geometries(layers)
@@ -147,11 +148,11 @@ def import_dwg(
         shutil.rmtree(work, ignore_errors=True)
 
     if feedback is not None and feedback.isCanceled():
-        return ImportResult(dwg.name, "error", "사용자가 취소했습니다",
+        return ImportResult(dwg.name, "error", tr("Cancelled"),
                             elapsed_sec=time.monotonic() - started), []
 
     if not layers:
-        return ImportResult(dwg.name, "empty", "엔티티가 없습니다",
+        return ImportResult(dwg.name, "empty", tr("No entities"),
                             elapsed_sec=time.monotonic() - started), []
 
     produced = list(layers.values()) + block_layers
@@ -172,7 +173,8 @@ def import_dwg(
         file=dwg.name,
         status="ok",
         note=" / ".join(filter(None, [
-            f"좌표가 깨진 피처 {dropped}개를 제외했습니다" if dropped else "",
+            tr("Dropped {count} features with broken coordinates").format(count=dropped)
+        if dropped else "",
             xrefs.note(absent_refs),
         ])),
         layers=results,
@@ -398,7 +400,7 @@ def _apply_hatch_patterns(layer, base_symbol, stroke) -> bool:
     if not keys:
         return False
 
-    categories = [QgsRendererCategory("", base_symbol.clone(), "채움 없음")]
+    categories = [QgsRendererCategory("", base_symbol.clone(), tr("No pattern"))]
     for key in sorted(keys):
         families = _families_from_key(key)
         symbol = _pattern_fill_symbol(families, stroke) if families else None
@@ -590,7 +592,7 @@ def _write_gpkg(layers: list, gpkg: Path, project=None) -> list:
             layer, str(gpkg), context, options
         )
         if error != QgsVectorFileWriter.NoError:
-            raise OSError(f"{layer.name()} 저장 실패: {message}")
+            raise OSError(f"{layer.name()} — {tr('could not save')}: {message}")
         first = False
 
         stored = QgsVectorLayer(f"{gpkg}|layername={layer.name()}", layer.name(), "ogr")

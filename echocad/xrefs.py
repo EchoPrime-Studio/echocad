@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .i18n import tr
+
 # LibreDWG는 BLOCK의 그룹코드 1에 참조 경로뿐 아니라 블록 설명도 넣는다.
 # 파일 확장자가 붙은 값만 참조로 본다.
 _DRAWING_SUFFIXES = (".dwg", ".dxf")
@@ -62,5 +64,7 @@ def note(absent: list[str]) -> str:
     if not absent:
         return ""
     shown = ", ".join(absent[:3])
-    more = f" 외 {len(absent) - 3}개" if len(absent) > 3 else ""
-    return f"외부 참조 파일이 없어 그 내용은 빠졌습니다 — {shown}{more}"
+    more = (tr(" and {count} more").format(count=len(absent) - 3)
+            if len(absent) > 3 else "")
+    return (tr("External reference files are missing, so their content is absent")
+            + f" — {shown}{more}")

@@ -1,8 +1,6 @@
 # DWG 한 장을 QGIS로 가져오는 다이얼로그. 파일·좌표계·출력만 받고 나머지는 importer가 한다
 from __future__ import annotations
 
-import shutil
-import tempfile
 from pathlib import Path
 
 from qgis.core import QgsCoordinateReferenceSystem, QgsProject
@@ -14,15 +12,16 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .. import engine, importer
+from ..i18n import tr
 from .engine_setup import EngineSetupDialog, resolve_engine
 
 # 상태 코드마다 사용자가 다음에 무엇을 해야 하는지 알려 준다 (SC-003).
 _STATUS_MESSAGE = {
-    "unsupported": "지원하지 않는 도면 포맷입니다. R14 이상 DWG만 읽을 수 있습니다.",
-    "timeout": "변환이 제한 시간을 넘겼습니다. 도면이 매우 크거나 손상됐을 수 있습니다.",
-    "empty": "변환은 됐지만 그릴 엔티티가 없습니다. 메타데이터 전용 도면일 수 있습니다.",
-    "truncated": "변환이 중간에 끊겨 도면 내용이 통째로 빠졌습니다.",
-    "error": "변환에 실패했습니다.",
+    "unsupported": "Unsupported drawing format. Only DWG R14 and newer can be read.",
+    "timeout": "Conversion timed out. The drawing may be very large or damaged.",
+    "empty": "Converted, but there is nothing to draw. This may be a metadata-only drawing.",
+    "truncated": "Conversion stopped part way, so the drawing content is missing.",
+    "error": "Conversion failed.",
 }
 
 
@@ -44,37 +43,36 @@ class _DialogFeedback:
 class ImportDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("EchoCad — DWG 가져오기")
+        self.setWindowTitle(tr("EchoCad — Import DWG"))
         self.setMinimumWidth(480)
 
         layout = QVBoxLayout(self)
 
         source = QHBoxLayout()
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText("DWG 파일")
-        browse = QPushButton("찾아보기…")
+        self.source_edit.setPlaceholderText(tr("DWG file"))
+        browse = QPushButton(tr("Browse…"))
         browse.clicked.connect(self._browse_source)
         source.addWidget(self.source_edit)
         source.addWidget(browse)
-        layout.addWidget(QLabel("가져올 도면"))
+        layout.addWidget(QLabel(tr("Drawing to import")))
         layout.addLayout(source)
 
-        layout.addWidget(QLabel("좌표계"))
-        crs_row = QHBoxLayout()
+        layout.addWidget(QLabel(tr("Coordinate system")))
+        # 프로젝트 좌표계로 채워 둔다. 이미 있는 데이터에 얹는 것이 보통이라
+        # 같은 좌표계를 쓰는 것이 맞다. 사용자가 바꾸는 것은 그대로 열려 있다.
         self.crs_widget = QgsProjectionSelectionWidget()
         self.crs_widget.setCrs(QgsProject.instance().crs())
-        crs_row.addWidget(self.crs_widget)
-        self._add_crs_suggest_button(crs_row)
-        layout.addLayout(crs_row)
+        layout.addWidget(self.crs_widget)
 
-        self.save_check = QCheckBox("GeoPackage로 저장 (체크 해제 시 임시 레이어)")
+        self.save_check = QCheckBox(tr("Save to GeoPackage (unchecked: temporary layers)"))
         layout.addWidget(self.save_check)
 
         output = QHBoxLayout()
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("저장할 .gpkg 경로")
+        self.output_edit.setPlaceholderText(tr("Path of the .gpkg to write"))
         self.output_edit.setEnabled(False)
-        output_browse = QPushButton("저장 위치…")
+        output_browse = QPushButton(tr("Save location…"))
         output_browse.setEnabled(False)
         output_browse.clicked.connect(self._browse_output)
         self.save_check.toggled.connect(self.output_edit.setEnabled)
@@ -96,64 +94,6 @@ class ImportDialog(QDialog):
 
         self._feedback: _DialogFeedback | None = None
 
-    def _add_crs_suggest_button(self, row):
-        """좌표계 추천 버튼. Community 빌드에는 만들지 않는다."""
-        try:
-            from ..pro import crs as crs_rules
-            from ..pro.crs_dialog import CrsChoiceDialog
-        except ImportError:
-            return
-        self._crs_rules = crs_rules
-        self._crs_dialog = CrsChoiceDialog
-
-        button = QPushButton("추천…")
-        button.setToolTip("도면 좌표 범위로 좌표계 후보를 찾습니다")
-        button.clicked.connect(self._suggest_crs)
-        row.addWidget(button)
-
-    def _suggest_crs(self):
-        # 좌표계 자동 판정도 유료 기능으로 광고된다. 버튼은 Pro 빌드에만 생기지만
-        # 그것만으로는 라이선스 검사가 아니다 — 키 없이도 눌리면 그냥 열린 기능이다.
-        from .. import pro
-
-        if not pro.unlocked():
-            from ..pro import license as licensing
-
-            QMessageBox.information(
-                self, "유료판 기능",
-                f"좌표계 자동 판정은 유료판 기능입니다.\n\n{licensing.decide(pro.build_date()).reason}",
-            )
-            return
-
-        source = self.source_edit.text().strip()
-        if not source:
-            QMessageBox.warning(self, "파일 없음", "먼저 DWG 파일을 지정하세요.")
-            return
-        try:
-            exe = resolve_engine()
-        except engine.EngineNotFound as err:
-            QMessageBox.warning(self, "변환 엔진 없음", str(err))
-            return
-
-        # 좌표 범위는 변환된 DXF 헤더에만 있다. 사용자가 버튼을 눌러 요청한
-        # 것이므로 한 번 더 변환하는 비용은 감수한다.
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        work = Path(tempfile.mkdtemp(prefix="echocad-crs-"))
-        try:
-            converted = engine.convert(Path(source), work / "probe.dxf", exe=exe)
-            extents = self._crs_rules.read_extents(converted.dxf) if converted.status == "ok" else None
-        finally:
-            QApplication.restoreOverrideCursor()
-            shutil.rmtree(work, ignore_errors=True)
-
-        if converted.status != "ok":
-            QMessageBox.warning(self, "읽지 못했습니다", converted.note or converted.status)
-            return
-
-        dialog = self._crs_dialog(self._crs_rules.suggest(extents), self)
-        if dialog.exec_() == QDialog.Accepted and dialog.chosen:
-            self.crs_widget.setCrs(QgsCoordinateReferenceSystem(dialog.chosen))
-
     def _profile_row(self, layout):
         """매핑 프로파일 선택. Community 빌드에는 아예 만들지 않는다."""
         try:
@@ -163,13 +103,13 @@ class ImportDialog(QDialog):
             return
         self._profiles = profiles
 
-        layout.addWidget(QLabel("매핑 프로파일 (선택)"))
+        layout.addWidget(QLabel(tr("Mapping profile (optional)")))
         row = QHBoxLayout()
         self.profile_edit = QLineEdit()
-        self.profile_edit.setPlaceholderText("CAD 레이어명을 GIS 스키마로 옮기는 규칙 파일")
-        pick = QPushButton("열기…")
+        self.profile_edit.setPlaceholderText(tr("Rule file that maps CAD layer names onto your GIS schema"))
+        pick = QPushButton(tr("Open…"))
         pick.clicked.connect(self._browse_profile)
-        make = QPushButton("예시 만들기…")
+        make = QPushButton(tr("Create example…"))
         make.clicked.connect(self._write_example_profile)
         row.addWidget(self.profile_edit)
         row.addWidget(pick)
@@ -178,7 +118,7 @@ class ImportDialog(QDialog):
 
     def _browse_profile(self):
         chosen, _ = QFileDialog.getOpenFileName(
-            self, "매핑 프로파일 선택", "", "프로파일 (*.json)"
+            self, tr("Choose mapping profile"), "", tr("Profile (*.json)")
         )
         if chosen:
             self.profile_edit.setText(chosen)
@@ -186,13 +126,13 @@ class ImportDialog(QDialog):
     def _write_example_profile(self):
         """규칙을 손으로 짜기 전에 형태를 보여 준다. 편집은 텍스트 에디터로 한다."""
         chosen, _ = QFileDialog.getSaveFileName(
-            self, "예시 프로파일 저장", "echocad-profile.json", "프로파일 (*.json)"
+            self, tr("Save example profile"), "echocad-profile.json", tr("Profile (*.json)")
         )
         if not chosen:
             return
         example = self._profiles.MappingProfile(
-            name="예시",
-            description="match는 glob 패턴입니다. 위에서부터 첫 매칭이 적용됩니다.",
+            name=tr("Example"),
+            description=tr("match is a glob pattern. The first rule that matches wins."),
             rules=[
                 self._profiles.Rule(match="A-WALL-*", layer_name="building_wall", geometry="polygon"),
                 self._profiles.Rule(match="*-TEXT", layer_name="annotation", geometry="point"),
@@ -201,7 +141,7 @@ class ImportDialog(QDialog):
         try:
             self._profiles.save(example, Path(chosen))
         except OSError as err:
-            QMessageBox.warning(self, "저장 실패", str(err))
+            QMessageBox.warning(self, tr("Could not save"), str(err))
             return
         self.profile_edit.setText(chosen)
 
@@ -215,18 +155,18 @@ class ImportDialog(QDialog):
         try:
             return self._profiles.load(Path(text))
         except self._profiles.ProfileError as err:
-            QMessageBox.warning(self, "프로파일 오류", str(err))
+            QMessageBox.warning(self, tr("Profile error"), str(err))
             return None
 
     def _browse_source(self):
-        chosen, _ = QFileDialog.getOpenFileName(self, "DWG 선택", "", "DWG 도면 (*.dwg)")
+        chosen, _ = QFileDialog.getOpenFileName(self, tr("Choose DWG"), "", tr("DWG drawing (*.dwg)"))
         if chosen:
             self.source_edit.setText(chosen)
             if not self.output_edit.text():
                 self.output_edit.setText(str(Path(chosen).with_suffix(".gpkg")))
 
     def _browse_output(self):
-        chosen, _ = QFileDialog.getSaveFileName(self, "GeoPackage 저장", "", "GeoPackage (*.gpkg)")
+        chosen, _ = QFileDialog.getSaveFileName(self, tr("Save GeoPackage"), "", "GeoPackage (*.gpkg)")
         if chosen:
             self.output_edit.setText(chosen)
 
@@ -239,7 +179,7 @@ class ImportDialog(QDialog):
     def _run(self):
         source = self.source_edit.text().strip()
         if not source:
-            QMessageBox.warning(self, "파일 없음", "가져올 DWG 파일을 지정하세요.")
+            QMessageBox.warning(self, tr("No file"), tr("Choose the DWG file to import."))
             return
 
         try:
@@ -251,12 +191,19 @@ class ImportDialog(QDialog):
                 # 설정 직후에도 실패할 수 있다 — 네트워크 드라이브나 USB가 빠지는 경우.
                 exe = resolve_engine()
             except engine.EngineNotFound as err:
-                QMessageBox.warning(self, "변환 엔진 없음", str(err))
+                QMessageBox.warning(self, tr("No converter"), str(err))
                 return
+
+        if not self.crs_widget.crs().isValid():
+            # 좌표계 없이 만들면 레이어가 다른 데이터와 맞지 않는 자리에 놓인다.
+            # 프로젝트에도 좌표계가 없는 새 프로젝트에서 실제로 생긴다.
+            QMessageBox.warning(self, tr("No coordinate system"),
+                                tr("Choose the coordinate system of the drawing."))
+            return
 
         output = Path(self.output_edit.text().strip()) if self.save_check.isChecked() else None
         if self.save_check.isChecked() and not self.output_edit.text().strip():
-            QMessageBox.warning(self, "저장 위치 없음", "GeoPackage 경로를 지정하세요.")
+            QMessageBox.warning(self, tr("No save location"), tr("Set the GeoPackage path."))
             return
 
         self.progress.setVisible(True)
@@ -275,7 +222,7 @@ class ImportDialog(QDialog):
             )
         except Exception as err:  # 예상 못 한 실패도 QGIS를 멈추게 두지 않는다
             result, layers = None, []
-            QMessageBox.critical(self, "가져오기 실패", str(err))
+            QMessageBox.critical(self, tr("Import failed"), str(err))
         finally:
             QApplication.restoreOverrideCursor()
             self._feedback = None
@@ -285,17 +232,21 @@ class ImportDialog(QDialog):
         if result is None:
             return
         if result.status != "ok":
-            detail = _STATUS_MESSAGE.get(result.status, "가져오지 못했습니다.")
-            QMessageBox.warning(self, "가져오기 실패", f"{detail}\n\n{result.note}".strip())
+            detail = tr(_STATUS_MESSAGE.get(result.status, "Could not import it."))
+            body = "\n\n".join(part for part in (detail, result.note) if part)
+            QMessageBox.warning(self, tr("Import failed"), body)
             return
 
         QgsProject.instance().addMapLayers(layers)
-        lines = [f"레이어 {len(result.layers)}개, 피처 {result.total_features:,}개를 가져왔습니다."]
+        lines = [tr("Imported {layers} layers and {features} features.").format(
+            layers=len(result.layers), features=f"{result.total_features:,}")]
         if result.note:
             lines.append(result.note)
         if result.unmatched_layers:
             shown = ", ".join(result.unmatched_layers[:8])
-            more = f" 외 {len(result.unmatched_layers) - 8}개" if len(result.unmatched_layers) > 8 else ""
-            lines.append(f"\n프로파일 규칙에 걸리지 않은 CAD 레이어 — {shown}{more}")
-        QMessageBox.information(self, "가져오기 완료", "\n".join(lines))
+            more = (tr(" and {count} more").format(count=len(result.unmatched_layers) - 8)
+                    if len(result.unmatched_layers) > 8 else "")
+            lines.append("\n" + tr("CAD layers no profile rule matched")
+                         + f" — {shown}{more}")
+        QMessageBox.information(self, tr("Import finished"), "\n".join(lines))
         self.accept()

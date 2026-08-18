@@ -26,6 +26,8 @@ _EXTRA_DIRS = (
 
 # QGIS는 GUI 앱이라 자식 프로세스를 그냥 띄우면 콘솔 창이 깜빡인다.
 # CREATE_NO_WINDOW는 Windows에만 있으므로 다른 OS에서는 빈 인자로 둔다.
+from .i18n import tr
+
 NO_CONSOLE = (
     {"creationflags": subprocess.CREATE_NO_WINDOW}
     if sys.platform == "win32" else {}
@@ -53,19 +55,22 @@ DOWNLOAD_URLS = {
 }
 
 _INSTALL_HINTS = {
-    "win32": "LibreDWG 공식 릴리스에서 win64 zip을 내려받아 풀고,\n"
-             "그 안의 dwg2dxf.exe 경로를 아래에 지정하세요.",
+    "win32": "Download the win64 zip from the LibreDWG releases page and unpack it,\n"
+             "then point the field below at dwg2dxf.exe inside it.",
     # 2026-08-16 실측 — Homebrew stable은 0.13.3이고 --HEAD도 없다. 이 버전은 표본
     # 50건 중 4건에서 출력 DXF가 잘리는데 종료 코드는 0이라 조용히 넘어간다.
     # 같은 표본이 0.14.8578에서는 4건 모두 통과한다(86% → 94%). 그래서 brew를
     # 첫 번째로 권하지 않는다.
-    "darwin": "EchoCad 릴리스 페이지에서 macOS용 dwg2dxf를 내려받아 풀고,\n"
-              "그 파일을 아래에 지정하세요. 실행 권한과 격리 해제는 플러그인이 처리합니다.\n"
-              "(brew install libredwg도 되지만 0.13.3이라 일부 도면이 잘립니다)",
+    "darwin": "Download the macOS build of dwg2dxf from the EchoCad releases page\n"
+              "and unpack it, then point the field below at it. Execute permission\n"
+              "and the quarantine flag are handled for you.\n"
+              "(brew install libredwg works too, but ships 0.13.3, which truncates\n"
+              "some drawings.)",
     # Linux는 v1 공식 지원 대상이 아니다(배포판 패키지 부재). 탐지·경로 지정은
     # OS 무관이라 그대로 동작하므로 코드를 막지 않고 안내만 구분한다.
-    "linux": "Linux는 공식 지원 대상이 아닙니다.\n"
-             "Homebrew(brew install libredwg)나 소스 빌드로 dwg2dxf를 준비한 뒤 경로를 직접 지정하면 동작합니다.",
+    "linux": "Linux is not an officially supported platform.\n"
+             "It works if you obtain dwg2dxf yourself — Homebrew\n"
+             "(brew install libredwg) or a source build — and set the path.",
 }
 
 
@@ -89,7 +94,7 @@ def install_hint(platform: str | None = None) -> str:
     key = platform or sys.platform
     if key.startswith("linux"):
         key = "linux"
-    return _INSTALL_HINTS.get(key, _INSTALL_HINTS["linux"])
+    return tr(_INSTALL_HINTS.get(key, _INSTALL_HINTS["linux"]))
 
 
 def find_dwg2dxf(explicit: Path | None = None) -> Path:
@@ -116,7 +121,8 @@ def find_dwg2dxf(explicit: Path | None = None) -> Path:
     if bundled.exists():
         return bundled
 
-    raise EngineNotFound(f"dwg2dxf를 찾을 수 없습니다. {install_hint()}")
+    raise EngineNotFound(
+        f"{tr('dwg2dxf was not found.')} {install_hint()}")
 
 
 def verify_engine(exe: Path) -> str:
@@ -130,11 +136,11 @@ def verify_engine(exe: Path) -> str:
             encoding="utf-8", errors="replace", **NO_CONSOLE,
         )
     except (OSError, subprocess.SubprocessError) as err:
-        raise EngineInstallError(f"실행할 수 없습니다: {err}") from err
+        raise EngineInstallError(f"{tr('Cannot run it')}: {err}") from err
 
     output = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if "dwg2dxf" not in output:
-        raise EngineInstallError(f"dwg2dxf가 아닙니다: {exe}")
+        raise EngineInstallError(f"{tr('This is not dwg2dxf')}: {exe}")
     return output.splitlines()[0]
 
 
@@ -201,7 +207,9 @@ def convert(dwg: Path, out: Path, exe: Path | None = None, timeout: int = TIMEOU
 
     version = dwg_version(dwg)
     if version.startswith(_TOO_OLD):
-        return ConvertResult("unsupported", None, f"{version} 포맷입니다. R14 이상만 지원합니다")
+        return ConvertResult("unsupported", None,
+                             tr("Format {version}. Only R14 and newer are supported.")
+                             .format(version=version))
 
     if exe is None:
         exe = find_dwg2dxf()
@@ -233,7 +241,7 @@ def convert(dwg: Path, out: Path, exe: Path | None = None, timeout: int = TIMEOU
     if not is_complete(out):
         return ConvertResult(
             "truncated", None,
-            "결과 DXF가 끝까지 쓰이지 않았습니다. dwg2dxf 0.14 이상이 필요합니다.",
+            tr("The DXF was not written to the end. dwg2dxf 0.14 or newer is required."),
         )
 
     return ConvertResult("ok", out)
