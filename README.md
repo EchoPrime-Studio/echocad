@@ -35,7 +35,7 @@ On first run the plugin shows you where to get it and remembers the path you pic
 | Platform | How |
 |---|---|
 | Windows | Download the win64 zip from the [LibreDWG releases](https://github.com/LibreDWG/libredwg/releases), unpack it, point the plugin at `dwg2dxf.exe` |
-| macOS | Download the universal build from [this project's releases](https://github.com/EchoPrime-Studio/echocad/releases) and point the plugin at it. Execute permission and the quarantine flag are handled for you |
+| macOS | Download the universal build from [this project's engine release](https://github.com/EchoPrime-Studio/echocad/releases/tag/engine-0.14.8578-patched) and point the plugin at it. Execute permission and the quarantine flag are handled for you |
 | Anywhere | Point the plugin at an existing `dwg2dxf` |
 
 On macOS, `brew install libredwg` also works but installs 0.13.3, which truncates some drawings while still reporting success. The build on the releases page is 0.14.8578.
