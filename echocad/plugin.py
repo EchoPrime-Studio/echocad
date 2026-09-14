@@ -4,8 +4,13 @@ from __future__ import annotations
 from qgis.PyQt.QtWidgets import QAction
 
 from .i18n import tr
-from .ui.engine_setup import EngineSetupDialog
 from .ui.import_dialog import ImportDialog
+
+# 무료판은 DXF 만 읽으므로 변환기 설정 화면이 아예 없다.
+try:
+    from .ui.engine_setup import EngineSetupDialog
+except ImportError:      # 무료판
+    EngineSetupDialog = None
 
 def _menu_label() -> str:
     """무료판과 유료판은 플러그인 ID가 달라 함께 설치될 수 있다. 메뉴로 구분한다."""
@@ -28,14 +33,20 @@ class EchoCadPlugin:
         self.provider = None
 
     def initGui(self):
-        self._add_action(tr("Import DWG…"), self._open_import)
-        self._add_action(tr("Converter setup…"), self._open_engine_setup)
+        self._add_action(tr("Import drawing…"), self._open_import)
+        if EngineSetupDialog is not None:
+            self._add_action(tr("Converter setup…"), self._open_engine_setup)
         # Community 빌드에는 pro/ 폴더가 없어 이 메뉴와 알고리즘이 생기지 않는다.
         try:
             from .pro.algorithms import EchoCadProvider
         except ImportError:
             return
         self._add_action(tr("Licence…"), self._open_license)
+
+        # 새 버전이 나왔는지 여기서 확인한다. 네트워크는 비동기라 시작을 막지 않는다.
+        from .pro import updates
+
+        updates.start(self.iface)
 
         from qgis.core import QgsApplication
 
@@ -61,12 +72,12 @@ class EchoCadPlugin:
         self.actions.append(action)
 
     def _open_import(self):
-        ImportDialog(self.iface.mainWindow()).exec_()
+        ImportDialog(self.iface.mainWindow()).exec()
 
     def _open_engine_setup(self):
-        EngineSetupDialog(self.iface.mainWindow()).exec_()
+        EngineSetupDialog(self.iface.mainWindow()).exec()
 
     def _open_license(self):
         from .pro.license_dialog import LicenseDialog
 
-        LicenseDialog(self.iface.mainWindow()).exec_()
+        LicenseDialog(self.iface.mainWindow()).exec()

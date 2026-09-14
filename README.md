@@ -1,6 +1,6 @@
 # EchoCad
 
-A QGIS plugin that imports AutoCAD **DWG** drawings, keeping the things that make a drawing readable — CAD layers, colours, line types, line widths and text.
+A QGIS plugin that imports **DXF** drawings the way they were drawn — CAD layers, colours, line types, line widths, hatch patterns and text.
 
 Everything runs on your machine. Drawings are never uploaded anywhere.
 
@@ -13,34 +13,22 @@ Everything runs on your machine. Drawings are never uploaded anywhere.
 - Optional GeoPackage output
 - Clear failure messages instead of silence — unsupported format, empty drawing, timeout are told apart
 
-Supported drawing formats are **R14 and newer**. R13 and older are rejected up front with a message rather than failing halfway.
+## DWG
+
+QGIS itself cannot open DWG files newer than the 2000 format. This free edition reads **DXF** — save the drawing as DXF from the CAD you use, then import it here.
+
+To open DWG directly (R14 to 2018 and newer) without a conversion step, see [EchoCad Pro](https://echocad.pages.dev) below.
 
 ## Installing
 
-Install from the QGIS Plugin Manager, or download `echocad-<version>.zip` from the releases and use *Plugins → Manage and Install Plugins → Install from ZIP*.
+Install from the QGIS Plugin Manager, or download `echocad-<version>.zip` from the [releases](https://github.com/EchoPrime-Studio/echocad/releases) and use *Plugins → Manage and Install Plugins → Install from ZIP*.
 
-Requires QGIS 3.34 LTR or newer. Windows and macOS are the supported platforms.
+Requires QGIS 3.34 LTR or newer. Windows and macOS are the supported platforms; nothing else needs installing.
 
-The interface follows your QGIS language. Nine are shipped — English, German, Spanish,
+The interface follows your QGIS language. Ten are shipped — English, German, Spanish,
 French, Italian, Japanese, Korean, Polish, Portuguese and Chinese (Simplified).
 Anything not translated falls back to English rather than showing a blank.
 Corrections and new languages are welcome: one JSON file per language in `echocad/translations/`.
-
-## The DWG converter
-
-Reading DWG needs [LibreDWG](https://www.gnu.org/software/libredwg/)'s `dwg2dxf`. It is **not bundled** with this plugin: LibreDWG is GPL-3 and this plugin only calls it as a separate process, so redistributing its binaries here would be wrong.
-
-On first run the plugin shows you where to get it and remembers the path you pick:
-
-| Platform | How |
-|---|---|
-| Windows | Download the win64 zip from the [LibreDWG releases](https://github.com/LibreDWG/libredwg/releases), unpack it, point the plugin at `dwg2dxf.exe` |
-| macOS | Download the universal build from [this project's engine release](https://github.com/EchoPrime-Studio/echocad/releases/tag/engine-0.14.8578-patched) and point the plugin at it. Execute permission and the quarantine flag are handled for you |
-| Anywhere | Point the plugin at an existing `dwg2dxf` |
-
-On macOS, `brew install libredwg` also works but installs 0.13.3, which truncates some drawings while still reporting success. The build on the releases page is 0.14.8578.
-
-Linux is not an officially supported platform for now, because LibreDWG is not in the major distribution repositories. It works if you build or install `dwg2dxf` yourself and set the path.
 
 ## Known limits
 
@@ -51,16 +39,14 @@ Linux is not an officially supported platform for now, because LibreDWG is not i
 
 ## EchoCad Pro
 
-A paid edition adds the parts that map a drawing's *meaning* into a GIS schema:
+The paid edition opens **DWG directly in QGIS** and adds the parts that carry a drawing's *meaning* into GIS:
 
-- Block attributes (`ATTRIB`) extracted into queryable attribute fields — the thing QGIS's own DWG import has not done since 2024
+- DWG (R14 to 2018 and newer) opened without a conversion step — the converter is bundled, nothing to install, works offline on closed networks
+- Drawings older than R14 that other tools reject are salvaged where possible
+- Block attributes (`ATTRIB`) extracted into queryable attribute fields
 - Mapping profiles — rules that merge several CAD layers into one of your feature classes, saved as a JSON file you can share and version
 - Batch folder conversion with a per-file report
 
+One office, 10 users, perpetual licence; one year of updates included. Details and pricing: <https://echocad.pages.dev>.
+
 Pro installs as a **separate plugin** (`echocad_pro`), so it never collides with this one on updates. You can keep both installed; the menus are named differently.
-
-It is sold as a perpetual licence with a separate annual update subscription — the version you bought keeps working after the subscription ends. See the [project homepage](https://github.com/EchoPrime-Studio/echocad).
-
-## Licence
-
-GPL-2.0-or-later, the same licence as QGIS. The `echocad/` directory in this repository is the complete source of the plugin.

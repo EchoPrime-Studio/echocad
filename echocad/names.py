@@ -68,3 +68,21 @@ def make_unique(names: list[str], fallback: str = "layer") -> dict[str, str]:
         used.add(candidate.casefold())
         mapping[original] = candidate
     return mapping
+
+
+def entity_type(subclasses) -> str:
+    """OGR의 `SubClasses`에서 CAD 엔티티 종류만 뽑는다.
+
+    `AcDbEntity:AcDbMText` → `MText`, `AcDbEntity:AcDbText:AcDbAttribute` → `Attribute`.
+    맨 뒤가 실제 종류이고 앞은 상속 사슬이다. `AcDb` 접두는 GIS 쪽에서 아무 뜻이 없어 뗀다.
+
+    이 값이 필요한 이유 — 가져온 뒤 "이 선이 원래 LINE 이었나 POLYLINE 이었나"를
+    못 보면 원본 도면을 다시 열어야 한다. 검수·재작성에서 매번 걸리는 지점이다.
+    """
+    text = str(subclasses or "").strip()
+    if not text:
+        return ""
+    last = text.rsplit(":", 1)[-1].strip()
+    if last.startswith("AcDb"):
+        last = last[4:]
+    return last
