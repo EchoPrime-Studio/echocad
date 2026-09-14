@@ -182,5 +182,5 @@
   "On Windows the free Autodesk DWG TrueView can convert it too.": "윈도우라면 무료 Autodesk DWG TrueView로도 변환할 수 있습니다.",
   "This is an old {version} drawing. It was recovered, so a few symbols may be missing - check it against the original.": "{version} 옛 형식 도면입니다. 되살린 결과라 심볼 일부가 빠졌을 수 있으니 원본과 대조해 보세요.",
   "This edition reads DXF drawings. To open DWG directly, use EchoCad Pro, or save the drawing as DXF from the CAD you use.": "이 판은 DXF 도면을 읽습니다. DWG를 바로 열려면 EchoCad Pro를 쓰시거나, 쓰시는 CAD에서 DXF로 저장해 주세요.",
-  "Already bought Pro? Get your installer at https://echocad.pages.dev/key": "이미 Pro 를 사셨으면 https://echocad.pages.dev/ko/key 에서 설치 파일을 받으세요."
+  "Already bought Pro? Get your installer at https://echocad.pages.dev/key": "이미 Pro 를 사셨으면 https://echocad.pages.dev/key 에서 설치 파일을 받으세요."
 }
