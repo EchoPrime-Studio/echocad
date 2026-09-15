@@ -22,7 +22,6 @@ from qgis.core import (
     QgsSymbol,
     QgsSymbolLayer,
     QgsTextFormat,
-    QgsUnitTypes,
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsVectorLayerSimpleLabeling,
@@ -61,10 +60,28 @@ except ImportError:  # Community 빌드에는 pro/ 폴더가 없다
 # 손상된 엔티티를 건너뛸 때, 같은 자리에서 이만큼 연속 실패하면 스트림이 죽은 것으로 본다.
 _MAX_CONSECUTIVE_ERRORS = 20
 
+def _symbol_property(name: str):
+    """심볼 레이어 데이터 정의 속성 키. QGIS 버전마다 이름이 다르다.
+
+    QGIS 3.34.9 에는 Property.PropertyStrokeColor 만 있고, 3.44.13 은 Property.StrokeColor 와
+    옛 이름을 둘 다 받는다(2026-09-15 실측). QGIS 4 는 새 이름을 쓴다. 옛 이름을 직접 쓰면
+    plugins.qgis.org 의 Qt6 검사가 스코프 없는 열거형으로 잡으므로, 있는 쪽을 골라 쓴다.
+    """
+    prop = QgsSymbolLayer.Property
+    member = getattr(prop, name, None)
+    return member if member is not None else getattr(prop, "Property" + name)
+
+
+_STROKE_COLOR = _symbol_property("StrokeColor")
+_FILL_COLOR = _symbol_property("FillColor")
+_STROKE_WIDTH = _symbol_property("StrokeWidth")
+_STROKE_STYLE = _symbol_property("StrokeStyle")
+_MARKER_SIZE = _symbol_property("Size")
+
 _GEOMETRY = {
-    QgsWkbTypes.PointGeometry: ("MultiPoint", "point"),
-    QgsWkbTypes.LineGeometry: ("MultiLineString", "line"),
-    QgsWkbTypes.PolygonGeometry: ("MultiPolygon", "polygon"),
+    Qgis.GeometryType.Point: ("MultiPoint", "point"),
+    Qgis.GeometryType.Line: ("MultiLineString", "line"),
+    Qgis.GeometryType.Polygon: ("MultiPolygon", "polygon"),
 }
 
 # cad_handle·cad_type·cad_linetype 는 OGR 이 이미 주는 값이라 읽는 비용이 없다. 담지 않으면
@@ -577,7 +594,7 @@ def _all_from_hidden(layer, hidden) -> bool:
 
 def _as_polygon(geometry: QgsGeometry):
     """닫힌 폴리라인을 폴리곤으로. 닫혀 있지 않으면 None을 돌려 원본을 그대로 쓰게 한다."""
-    if QgsWkbTypes.geometryType(geometry.wkbType()) != QgsWkbTypes.LineGeometry:
+    if QgsWkbTypes.geometryType(geometry.wkbType()) != Qgis.GeometryType.Line:
         return None
 
     # 단일파트에 asMultiPolyline을 부르면 예외가 난다. 종류를 먼저 본다.
@@ -653,17 +670,17 @@ def _pattern_fill_symbol(families, stroke) -> "QgsFillSymbol | None":
         layer = QgsLinePatternFillSymbolLayer()
         layer.setLineAngle(family.angle)
         layer.setDistance(family.spacing)
-        layer.setDistanceUnit(QgsUnitTypes.RenderMapUnits)
+        layer.setDistanceUnit(Qgis.RenderUnit.MapUnits)
         # 선 자체는 가늘게. CAD 해치선은 굵기를 따로 갖지 않는다.
         layer.setLineWidth(0.2)
-        layer.setLineWidthUnit(QgsUnitTypes.RenderMillimeters)
+        layer.setLineWidthUnit(Qgis.RenderUnit.Millimeters)
         # subSymbol()이 준 포인터를 setSubSymbol로 되돌려주면 이중 해제로 죽는다.
         # 제자리에서 고친다.
         sub = layer.subSymbol()
         if sub is not None:
             for position in range(sub.symbolLayerCount()):
                 sub.symbolLayer(position).setDataDefinedProperty(
-                    QgsSymbolLayer.PropertyStrokeColor, stroke)
+                    _STROKE_COLOR, stroke)
             if family.dashes:
                 _set_dash_vector(sub, family.dashes)
         built.append(layer)
@@ -674,7 +691,7 @@ def _pattern_fill_symbol(families, stroke) -> "QgsFillSymbol | None":
     # 경계선은 남긴다. 해치만 그리면 도형의 윤곽이 사라진다.
     outline = QgsSimpleFillSymbolLayer()
     outline.setBrushStyle(Qt.BrushStyle.NoBrush)
-    outline.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeColor, stroke)
+    outline.setDataDefinedProperty(_STROKE_COLOR, stroke)
     built.append(outline)
 
     # QgsFillSymbol()은 레이어가 없는 심볼을 만든다. deleteSymbolLayer(0)을 부르면
@@ -693,7 +710,7 @@ def _set_dash_vector(line_symbol, dashes) -> None:
             layer.setUseCustomDashPattern(True)
             layer.setCustomDashVector(values)
             if hasattr(layer, "setCustomDashPatternUnit"):
-                layer.setCustomDashPatternUnit(QgsUnitTypes.RenderMapUnits)
+                layer.setCustomDashPatternUnit(Qgis.RenderUnit.MapUnits)
 
 
 def _apply_hatch_patterns(layer, base_symbol, stroke) -> bool:
@@ -762,19 +779,19 @@ def _apply_cad_colors(buckets) -> None:
             continue
         for position in range(symbol.symbolLayerCount()):
             symbol_layer = symbol.symbolLayer(position)
-            symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeColor, stroke)
-            if layer.geometryType() == QgsWkbTypes.PolygonGeometry:
-                symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyFillColor, fill)
+            symbol_layer.setDataDefinedProperty(_STROKE_COLOR, stroke)
+            if layer.geometryType() == Qgis.GeometryType.Polygon:
+                symbol_layer.setDataDefinedProperty(_FILL_COLOR, fill)
             else:
-                symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyFillColor, stroke)
-            if layer.geometryType() != QgsWkbTypes.PointGeometry:
-                symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth, width)
+                symbol_layer.setDataDefinedProperty(_FILL_COLOR, stroke)
+            if layer.geometryType() != Qgis.GeometryType.Point:
+                symbol_layer.setDataDefinedProperty(_STROKE_WIDTH, width)
                 _use_lineweight_units(symbol_layer)
-            if layer.geometryType() == QgsWkbTypes.LineGeometry:
-                symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeStyle, dash)
-            if layer.geometryType() == QgsWkbTypes.PointGeometry:
-                symbol_layer.setDataDefinedProperty(QgsSymbolLayer.PropertySize, marker_size)
-        if layer.geometryType() == QgsWkbTypes.PolygonGeometry and                 _apply_hatch_patterns(layer, symbol, stroke):
+            if layer.geometryType() == Qgis.GeometryType.Line:
+                symbol_layer.setDataDefinedProperty(_STROKE_STYLE, dash)
+            if layer.geometryType() == Qgis.GeometryType.Point:
+                symbol_layer.setDataDefinedProperty(_MARKER_SIZE, marker_size)
+        if layer.geometryType() == Qgis.GeometryType.Polygon and                 _apply_hatch_patterns(layer, symbol, stroke):
             continue
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
@@ -792,7 +809,7 @@ def _use_lineweight_units(symbol_layer) -> None:
     """
     for setter in ("setWidthUnit", "setStrokeWidthUnit"):
         if hasattr(symbol_layer, setter):
-            getattr(symbol_layer, setter)(QgsUnitTypes.RenderMillimeters)
+            getattr(symbol_layer, setter)(Qgis.RenderUnit.Millimeters)
             return
 
 
@@ -808,7 +825,7 @@ def _enable_text_labels(buckets) -> None:
 
         text_format = QgsTextFormat()
         # CAD 글자 높이는 도면 단위다. 화면 배율과 무관하게 원본 크기를 지켜야 한다.
-        text_format.setSizeUnit(QgsUnitTypes.RenderMapUnits)
+        text_format.setSizeUnit(Qgis.RenderUnit.MapUnits)
         text_format.setSize(2.0)
 
         settings = QgsPalLayerSettings()
@@ -817,20 +834,20 @@ def _enable_text_labels(buckets) -> None:
         # (LabelPredefinedPointPosition)에도 있어서 import는 되고 대입에서 TypeError가 난다.
         # 2026-08-17 실측 — QGIS 3.44.13과 4.2.1 양쪽에서 재현되고, 아래 형태는 양쪽 다 통과한다.
         settings.placement = Qgis.LabelPlacement.OverPoint
-        settings.offsetUnits = QgsUnitTypes.RenderMapUnits
+        settings.offsetUnits = Qgis.RenderUnit.MapUnits
         # CAD는 글자가 겹쳐도 전부 그린다. QGIS 기본값은 겹치면 숨기므로 끈다.
         settings.displayAll = True
         settings.obstacle = False
         settings.setFormat(text_format)
 
         properties = settings.dataDefinedProperties()
-        properties.setProperty(QgsPalLayerSettings.Size, QgsProperty.fromField("text_size"))
-        properties.setProperty(QgsPalLayerSettings.LabelRotation, QgsProperty.fromField("text_angle"))
-        properties.setProperty(QgsPalLayerSettings.Color, QgsProperty.fromField("color"))
+        properties.setProperty(QgsPalLayerSettings.Property.Size, QgsProperty.fromField("text_size"))
+        properties.setProperty(QgsPalLayerSettings.Property.LabelRotation, QgsProperty.fromField("text_angle"))
+        properties.setProperty(QgsPalLayerSettings.Property.Color, QgsProperty.fromField("color"))
         # 삽입점 기준 글자 방향과 오프셋도 원본을 따른다.
-        properties.setProperty(QgsPalLayerSettings.OffsetQuad, QgsProperty.fromField("text_quad"))
+        properties.setProperty(QgsPalLayerSettings.Property.OffsetQuad, QgsProperty.fromField("text_quad"))
         properties.setProperty(
-            QgsPalLayerSettings.OffsetXY,
+            QgsPalLayerSettings.Property.OffsetXY,
             QgsProperty.fromExpression("concat(\"text_dx\", ',', \"text_dy\")"),
         )
         settings.setDataDefinedProperties(properties)
@@ -908,13 +925,13 @@ def _write_gpkg(layers: list, gpkg: Path, project=None) -> list:
         options.driverName = "GPKG"
         options.layerName = layer.name()
         options.actionOnExistingFile = (
-            QgsVectorFileWriter.CreateOrOverwriteFile if first
-            else QgsVectorFileWriter.CreateOrOverwriteLayer
+            QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile if first
+            else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
         )
         error, message, *_ = QgsVectorFileWriter.writeAsVectorFormatV3(
             layer, str(gpkg), context, options
         )
-        if error != QgsVectorFileWriter.NoError:
+        if error != QgsVectorFileWriter.WriterError.NoError:
             raise OSError(f"{layer.name()} — {tr('could not save')}: {message}")
         first = False
 

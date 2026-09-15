@@ -6,10 +6,10 @@ qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 description=Import DXF drawings into QGIS with CAD layers, colours, line types, hatch patterns and text intact. DWG is opened directly by EchoCad Pro.
 about=EchoCad reads DXF drawings the way they were drawn: one QGIS layer per CAD layer, entity colour, line type and line width carried over, hatch patterns rebuilt from the drawing's own definitions, and text at its original size, rotation and colour. Everything runs locally - drawings never leave your machine. QGIS itself cannot open DWG files newer than the 2000 format. This free edition reads DXF (save as DXF from the CAD you use). EchoCad Pro opens DWG (R14 to 2018 and newer) directly in QGIS with a bundled converter, works offline on closed networks, and adds block attribute extraction, batch folder conversion and layer mapping profiles: https://echocad.pages.dev. The interface follows your QGIS language: English, German, Spanish, French, Italian, Japanese, Korean, Polish, Portuguese and Chinese are included.
-version=0.1.0
+version=0.1.1
 author=EchoPrime Studio
 email=echoprime.studio@gmail.com
-homepage=https://github.com/EchoPrime-Studio/echocad
+homepage=https://echocad.pages.dev/dxf
 tracker=https://github.com/EchoPrime-Studio/echocad/issues
 repository=https://github.com/EchoPrime-Studio/echocad
 icon=icon.png
@@ -18,7 +18,10 @@ tags=dwg,dxf,cad,autocad,import,conversion,drawing
 category=Vector
 experimental=False
 deprecated=False
-changelog=0.1.0
+changelog=0.1.1
+    - Use QGIS 4 style scoped enum names (no behaviour change)
+    - Homepage now points to the free edition page with before/after screenshots
+    0.1.0
     First release.
     - Import DXF as one QGIS layer per CAD layer
     - Carry over colour, line type, line width and text size/rotation/colour

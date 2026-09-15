@@ -56,5 +56,5 @@ def _log_quietly(err_class, err_no, message):
         from qgis.core import Qgis, QgsMessageLog
     except ImportError:      # QGIS 밖(도구·테스트)에서는 조용히 넘어간다
         return
-    level = Qgis.Critical if err_class == gdal.CE_Failure else Qgis.Warning
+    level = Qgis.MessageLevel.Critical if err_class == gdal.CE_Failure else Qgis.MessageLevel.Warning
     QgsMessageLog.logMessage(f"GDAL {err_no}: {message}", "EchoCad", level)
