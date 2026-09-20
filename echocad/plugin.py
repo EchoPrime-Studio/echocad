@@ -37,9 +37,11 @@ class EchoCadPlugin:
         if EngineSetupDialog is not None:
             self._add_action(tr("Converter setup…"), self._open_engine_setup)
         # Community 빌드에는 pro/ 폴더가 없어 이 메뉴와 알고리즘이 생기지 않는다.
+        # 대신 Pro 안내를 띄운다 - 이게 없으면 Pro 가 있다는 것조차 알 길이 없다.
         try:
             from .pro.algorithms import EchoCadProvider
         except ImportError:
+            self._add_action(tr("What Pro adds…"), self._open_pro_info)
             return
         self._add_action(tr("Licence…"), self._open_license)
 
@@ -81,3 +83,9 @@ class EchoCadPlugin:
         from .pro.license_dialog import LicenseDialog
 
         LicenseDialog(self.iface.mainWindow()).exec()
+
+    def _open_pro_info(self):
+        """무료판에만 있는 메뉴. pro/ 가 없어도 떠야 하므로 ui/ 에 둔다."""
+        from .ui.pro_info import ProInfoDialog
+
+        ProInfoDialog(self.iface.mainWindow()).exec()

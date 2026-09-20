@@ -12,9 +12,13 @@ from qgis.core import (
     Qgis,
     QgsCategorizedSymbolRenderer,
     QgsFeature,
+    QgsField,
     QgsFillSymbol,
     QgsGeometry,
+    QgsLineString,
     QgsPalLayerSettings,
+    QgsPoint,
+    QgsPolygon,
     QgsProject,
     QgsProperty,
     QgsRendererCategory,
@@ -27,7 +31,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import QVariant, Qt
 from qgis.PyQt.QtXml import QDomDocument
 
 from . import (dxfenc, hatches, layerstate, linetypes, mtext, names, outliers,
@@ -40,6 +44,7 @@ try:
 except ImportError:      # 무료판
     engine = None
 from .i18n import tr
+from .links import PRO_URL as _PRO_URL
 from .gdalopts import dxf_options
 
 try:
@@ -191,6 +196,9 @@ def import_dwg(
 
     work = Path(tempfile.mkdtemp(prefix="echocad-"))
     try:
+        acis_raw: Path | None = None
+        acds_raw: Path | None = None
+        solids_locked = 0          # Pro 가 아니어서 못 가져온 3차원 솔리드 수
         # DXF 는 그대로 읽는다. 변환기를 태울 이유가 없고, 무료판에는 변환기가 없다.
         if dwg.suffix.lower() == ".dxf":
             source = dwg
@@ -204,11 +212,17 @@ def import_dwg(
                 # 우리 사용자에게 권하면 약관 위반을 권하는 셈이다 (2026-08-24 확인).
                 tr("This edition reads DXF drawings. To open DWG directly, use "
                    "EchoCad Pro, or save the drawing as DXF from the CAD you use.")
-                + " " + tr("Already bought Pro? Get your installer at "
-                           "https://echocad.pages.dev/key"),
+                + " " + _dwg_format_note(dwg)
+                + " " + tr("Already bought Pro? Get your installer at {url}").format(
+                    url=_PRO_URL),
                 elapsed_sec=time.monotonic() - started), []
         else:
-            converted = engine.convert(dwg, work / (dwg.stem + ".dxf"), exe=exe)
+            # 도면에 든 원본 ACIS 도 함께 받아 둔다. DXF 로 나온 SAT 보다 정확하다
+            # (acis 모듈의 SAB 설명 참조).
+            acis_raw = work / (dwg.stem + ".acis")
+            acds_raw = work / (dwg.stem + ".acds")
+            converted = engine.convert(dwg, work / (dwg.stem + ".dxf"), exe=exe,
+                                       acis_out=acis_raw, acds_out=acds_raw)
             if converted.status != "ok":
                 return ImportResult(dwg.name, converted.status, converted.note,
                                     elapsed_sec=time.monotonic() - started), []
@@ -269,6 +283,18 @@ def import_dwg(
         absent_refs = xrefs.missing(source, dwg)
 
         block_layers = []
+        # 3차원 솔리드(ACIS). OGR 이 그리지 못하는 것들을 따로 읽는다.
+        # **Pro 기능이다.** 무료판에는 몇 개 있는지만 알려 준다 - 조용히 빼면
+        # 사용자는 도면이 빈 줄 알고 파일이 깨졌다고 여긴다.
+        solid_layer = None
+        if pro is not None and pro.unlocked():
+            solid_layer = _acis_layer(source, crs_id,
+                                      {layer.name() for layer in layers.values()},
+                                      acis_raw=acis_raw, acds_raw=acds_raw)
+        else:
+            solids_locked = acis_entity_count(source)
+        if solid_layer is not None:
+            layers[(solid_layer.name(), "polygon")] = solid_layer
         # 키가 없거나 만료됐으면 블록 속성을 못 뽑는다. 조용히 넘기지 않고 적어 둔다.
         attribs_skipped = bool(
             extract_attribs and pro_attribs is not None and not pro.unlocked())
@@ -282,6 +308,11 @@ def import_dwg(
                 block_layers = [layer for layer in block_layers
                                 if not _all_from_hidden(layer, hidden)]
 
+        # 그릴 것이 없을 때 이유를 말하려면 원본을 아직 볼 수 있을 때 봐야 한다.
+        # 아래 finally 가 임시 폴더를 지우므로 여기서 미리 본다 (2026-09-19 - 지운
+        # 뒤에 보려다 "No entities" 만 나왔다).
+        empty_kinds = _entity_kinds(source) if not layers else []
+
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -290,7 +321,17 @@ def import_dwg(
                             elapsed_sec=time.monotonic() - started), []
 
     if not layers:
-        return ImportResult(dwg.name, "empty", tr("No entities"),
+        # 그릴 것이 없다고 다 같은 말을 하면 안 된다. 도면이 정말 비었을 수도 있고,
+        # 우리가 못 그리는 종류만 들었을 수도 있다. 뒤쪽이면 그 종류를 말해 준다.
+        note = tr("The drawing holds only {kinds}, which EchoCad does not draw."
+                  ).format(kinds=", ".join(empty_kinds)) if empty_kinds else tr("No entities")
+        if solids_locked:
+            # 위 문장은 "그리지 않는다" 고 하는데 Pro 는 그린다. 솔리드밖에 없으면
+            # 아예 갈아 끼운다 - 같은 말을 두 번 하면서 한쪽이 거짓이면 헷갈린다.
+            note = (_solids_note(solids_locked)
+                    if set(empty_kinds) <= _ACIS_KINDS
+                    else " ".join([note, _solids_note(solids_locked)]))
+        return ImportResult(dwg.name, "empty", note,
                             elapsed_sec=time.monotonic() - started), []
 
     produced = list(layers.values()) + block_layers
@@ -318,6 +359,7 @@ def import_dwg(
             tr("Closed {count} open polylines into polygons").format(count=closed_rings)
         if closed_rings else "",
             tr("Attached {count} texts to shapes").format(count=joined) if joined else "",
+            _solids_note(solids_locked),
             xrefs.note(absent_refs),
         ])),
         layers=results,
@@ -576,6 +618,110 @@ def _fill_buckets(entities, buckets, taken, linetype_table, hatch_table,
             # 위의 Z 문제를 이 숫자가 없어서 오래 못 봤다.
             if skipped is not None:
                 skipped[0] += 1
+
+
+# OGR 이 그리지 못해 우리가 따로 읽는 종류. Pro 기능이다.
+# OGR 이 그리지 못하는 것들. 3DFACE 는 여기 없다 - 그건 ACIS 가 아니라 그냥
+# 메시 면이고 OGR 이 그린다. 넣으면 Pro 가 가져올 것도 아닌 것을 센다.
+_ACIS_KINDS = frozenset({
+    "3DSOLID", "REGION", "BODY", "SURFACE",
+    "EXTRUDEDSURFACE", "LOFTEDSURFACE", "NURBSURFACE", "PLANESURFACE",
+    "REVOLVEDSURFACE", "SWEPTSURFACE",
+})
+
+_DWG_FORMATS = {
+    "AC1009": "R11/R12", "AC1012": "R13", "AC1014": "R14", "AC1015": "R2000",
+    "AC1018": "R2004", "AC1021": "R2007", "AC1024": "R2010", "AC1027": "R2013",
+    "AC1032": "R2018",
+}
+
+
+def _dwg_format_note(dwg: Path) -> str:
+    """DWG 머리말 6바이트만 보고 형식 이름을 알려준다.
+
+    무료판이 DWG 를 받았을 때 "무엇을 받았는지" 조차 말해 주지 않으면, 사용자는
+    자기 파일이 잘못된 줄 안다. 앞 6바이트는 암호화되지 않아 그냥 읽힌다.
+    """
+    try:
+        with open(dwg, "rb") as fh:
+            sig = fh.read(6).decode("ascii", "replace")
+    except OSError:
+        return ""
+    name = _DWG_FORMATS.get(sig)
+    return tr("This is a DWG {format} file.").format(format=name) if name else ""
+
+
+def _solids_note(count: int) -> str:
+    """Pro 가 아니어서 못 가져온 3차원 솔리드를 알린다.
+
+    무료판이 "무엇을 더 가져올 수 있는지"를 숫자로 보여 주는 자리다. 막연한
+    "업그레이드하세요" 는 아무도 안 누른다. 몇 개인지 알아야 값이 보인다.
+    """
+    if not count:
+        return ""
+    return (tr("3D solids in this drawing: {count}. EchoCad Pro brings them in "
+               "with their curved surfaces.").format(count=count)
+            + " " + _PRO_URL)
+
+
+def _entity_counts(path: Path) -> dict[str, int]:
+    """ENTITIES 섹션에 어떤 종류의 엔티티가 몇 개 있는지.
+
+    DXF 는 (코드, 값) 두 줄이 한 쌍이다. `0/SECTION` 다음의 `2/<이름>` 이 섹션
+    이름이고, 섹션 안에서 `0/<이름>` 이 엔티티 종류다.
+
+    **글자만 센다.** ACIS 를 어떻게 푸는지는 여기 없다 - 무료판에 들어가는 코드라
+    읽는 방법을 알려 주면 안 된다.
+    """
+    counts: dict[str, int] = {}
+    section = None
+    pending = None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                value = raw.strip()
+                if pending is None:
+                    pending = value
+                    continue
+                code, pending = pending, None
+                if code == "0":
+                    if value == "SECTION":
+                        section = "?"
+                    elif value == "ENDSEC":
+                        section = None
+                    elif section == "ENTITIES":
+                        counts[value] = counts.get(value, 0) + 1
+                elif code == "2" and section == "?":
+                    section = value
+    except OSError:
+        return {}
+    return counts
+
+
+def acis_entity_count(path: Path) -> int:
+    """도면에 든 3차원 솔리드 엔티티 수. 무료판이 "몇 개 있는지" 를 말하려고 센다.
+
+    엔티티 **이름만** 센다. 안에 든 ACIS 는 건드리지 않는다 - 그건 Pro 기능이고,
+    푸는 코드(acis.py)는 무료판에 들어가지 않는다.
+    """
+    counts = _entity_counts(path)
+    return sum(counts.get(kind, 0) for kind in _ACIS_KINDS)
+
+
+def _entity_kinds(path: Path, limit: int = 6) -> list[str]:
+    """ENTITIES 섹션에 어떤 종류의 엔티티가 있는지. 그릴 것이 없을 때 이유를 말하려고 센다.
+
+    왜 필요한가 - 3DSOLID 하나만 든 도면을 "No entities" 라고 알리면 사용자는 파일이
+    깨진 줄 안다. 실제로는 엔티티가 있고 우리가 못 그리는 것이다 (2026-09-19 실측 -
+    autodesk_visualization_aerial 이 그렇다). OGR 이 피처를 못 만들어도 원본 DXF 에는
+    남아 있으므로 파일을 훑어 종류만 센다.
+
+    DXF 는 (코드, 값) 두 줄이 한 쌍이다. `0/SECTION` 다음의 `2/<이름>` 이 섹션 이름이고,
+    섹션 안에서 `0/<이름>` 이 엔티티 종류다.
+    """
+    counts = _entity_counts(path)
+    # 종류만 말한다. 개수까지 넣으면 번역문에서 문장이 어색해진다.
+    return [name for name, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
 
 
 def _all_from_hidden(layer, hidden) -> bool:
@@ -906,6 +1052,77 @@ def _new_memory_layer(cad_layer: str, suffix: str, wkb_name: str, crs_id: str, t
     name = names.unique_name(f"{names.sanitize(cad_layer)}_{suffix}", taken)
 
     return QgsVectorLayer(f"{wkb_name}?crs={crs_id}{_FIELDS}", name, "memory")
+
+
+def _acis_layer(dxf: Path, crs_id: str, taken: set[str], acis_raw: Path | None = None,
+                acds_raw: Path | None = None):
+    """도면에 든 3차원 솔리드(ACIS)를 면 레이어로 만든다.
+
+    OGR 은 3DSOLID·REGION 을 그리지 못한다. 그 안의 ACIS 데이터를 `acis` 모듈로 풀어
+    면 폴리곤으로 낸다. 높이(Z)를 그대로 살린다 - 눌러 버리면 3차원 도면이 아니게 된다.
+
+    도면에서 뽑아 둔 **원본** ACIS 를 먼저 본다. DXF 로 나온 SAT 는 LibreDWG 가 다시
+    쓴 글자라 포인터가 어긋나 면이 뭉개지는데 원본은 그렇지 않다(acis 모듈의 SAB 설명).
+    """
+    from . import acis
+
+    bodies = acis.sat_bodies(dxf)
+    # 원본이 어디 있는지는 도면마다 다르다. R2013+ 라도 어떤 도면은 엔티티에,
+    # 어떤 도면은 AcDs 절에만 있다. 한쪽이 비면 다른 쪽을 본다.
+    polys = acis.raw_faces(Path(acis_raw)) if (acis_raw is not None
+                                               and Path(acis_raw).exists()) else []
+    if not polys and acds_raw is not None and Path(acds_raw).exists():
+        for recs in acis.sab_bodies(Path(acds_raw)):
+            polys += acis.sab_faces(recs)
+    if polys:
+        entities = [(bodies[0][0] if bodies else "", polys)]
+    else:
+        # DXF 를 직접 읽는 길이다(무료판, 또는 원본을 못 받았을 때). 여기 SAT 는
+        # AutoCAD 가 쓴 것이면 번호가 스스로 맞고, LibreDWG 가 다시 쓴 것이면 어긋난다.
+        # 그래도 옛 걷기(종류로 짐작하는 것)보다 이쪽이 낫다 - 실측 13면/퇴화 4 에서
+        # 13면/퇴화 0 이 됐다(2026-09-19, 실제 AutoCAD R2000 DXF).
+        entities = [(handle, acis.raw_sat_faces("\n".join(lines)))
+                    for handle, lines in bodies]
+    if not any(p for _, p in entities):
+        return None
+
+    layer = QgsVectorLayer(f"MultiPolygonZ?crs={crs_id}", "", "memory")
+    provider = layer.dataProvider()
+    provider.addAttributes([
+        QgsField("cad_handle", QVariant.String),  # 원본 엔티티 핸들
+        QgsField("cad_type", QVariant.String),    # 3DSOLID / REGION …
+        QgsField("solid", QVariant.String),       # 몇 번째 솔리드인가
+        QgsField("face", QVariant.Int),          # 그 안에서 몇 번째 면인가
+        QgsField("surface", QVariant.String),    # 평면/원뿔/토러스/…
+    ])
+    layer.updateFields()
+
+    features = []
+    for index, (handle, polygons) in enumerate(entities):
+        for face_no, rings in enumerate(polygons, start=1):
+            if not rings or len(rings[0]) < 4:
+                continue
+            # Z 를 살려야 하므로 XY 평면 함수가 아니라 QgsPolygon 을 직접 만든다.
+            # rings[0] 이 바깥, 나머지가 구멍이다. 구멍을 빼면 면이 메워진다.
+            shape = QgsPolygon()
+            shape.setExteriorRing(
+                QgsLineString([QgsPoint(p[0], p[1], p[2]) for p in rings[0]]))
+            for hole in rings[1:]:
+                if len(hole) >= 4:
+                    shape.addInteriorRing(
+                        QgsLineString([QgsPoint(p[0], p[1], p[2]) for p in hole]))
+            geometry = QgsGeometry(shape)
+            if geometry.isEmpty():
+                continue
+            feature = QgsFeature(layer.fields())
+            feature.setGeometry(geometry)
+            feature.setAttributes([handle, "3DSOLID", f"ACIS{index + 1}", face_no, ""])
+            features.append(feature)
+    if not features:
+        return None
+    provider.addFeatures(features)
+    layer.setName(names.unique_name("EchoCad_3DSOLID_polygon", taken))
+    return layer
 
 
 def _write_gpkg(layers: list, gpkg: Path, project=None) -> list:
