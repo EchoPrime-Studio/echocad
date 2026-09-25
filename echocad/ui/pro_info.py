@@ -16,6 +16,7 @@ from ..links import PRO_URL as BUY_URL
 _FEATURES = tr(
     "DWG drawings — R14 to 2018, offline, with no other converter needed\n"
     "3D solids — faces with their curved surfaces and holes\n"
+    "3D view — turn the model, then take a flat drawing from that angle\n"
     "Elevations — keep the drawing's Z values instead of flattening\n"
     "Block attributes — pull attribute values out into a table\n"
     "Text attaching — turn labels beside a shape into that shape's attributes\n"

@@ -85,3 +85,56 @@ def hidden_layers(dxf: Path, utf8: bool = True) -> set[str]:
 
     flush()
     return hidden
+
+
+def layer_colors(dxf: Path, utf8: bool = True) -> dict[str, str]:
+    """레이어 표의 모든 레이어와 그 색(#rrggbb). 규칙 화면이 도면 레이어를 보여 줄 때 쓴다.
+
+    420(트루컬러)이 있으면 그것, 없으면 62(ACI, 꺼진 것은 음수라 절댓값). 읽지 못하면 빈 사전.
+    """
+    from .acicolor import aci_to_hex
+
+    out: dict[str, str] = {}
+    in_layer = False
+    name, aci, true = "", 7, None
+
+    def flush():
+        nonlocal name, aci, true
+        if in_layer and name:
+            out[name] = f"#{true:06x}" if true is not None else aci_to_hex(abs(aci) or 7)
+        name, aci, true = "", 7, None
+
+    encoding = "utf-8" if utf8 else "cp949"
+    try:
+        with Path(dxf).open("r", encoding=encoding, errors="replace") as handle:
+            code = None
+            seen_table = False
+            for raw in handle:
+                value = raw.strip()
+                if code is None:
+                    code = value
+                    continue
+                group, code = code, None
+                if group == "0":
+                    flush()
+                    in_layer = value == "LAYER"
+                    if in_layer:
+                        seen_table = True
+                    elif value == "ENDSEC" and seen_table:
+                        break
+                elif in_layer and group == "2":
+                    name = value
+                elif in_layer and group == "62":
+                    try:
+                        aci = int(value)
+                    except ValueError:
+                        pass
+                elif in_layer and group == "420":
+                    try:
+                        true = int(value) & 0xFFFFFF
+                    except ValueError:
+                        pass
+    except OSError:
+        return {}
+    flush()
+    return out

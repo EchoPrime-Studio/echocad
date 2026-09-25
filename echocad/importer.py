@@ -1,6 +1,7 @@
 # DXF를 CAD 레이어별 QGIS 벡터 레이어로 나누는 모듈. 원본 도면과 같은 색·글자로 보이게 스타일까지 옮긴다
 from __future__ import annotations
 
+import math
 import shutil
 import tempfile
 import time
@@ -9,6 +10,9 @@ from pathlib import Path
 
 from osgeo import ogr
 from qgis.core import (
+    QgsRectangle,
+    QgsPointXY,
+    QgsMultiPolygon,
     Qgis,
     QgsCategorizedSymbolRenderer,
     QgsFeature,
@@ -139,6 +143,10 @@ class ImportResult:
     closed_rings: int = 0      # 열린 선을 닫아 만든 면 수 (Pro)
     unmatched_layers: list[str] = field(default_factory=list)
     elapsed_sec: float = 0.0
+    # 가져오기 보고서(importreport). 도면 원문과 가져온 피처를 맞댄 결과.
+    report: dict | None = None
+    # 빠진 엔티티만 잘라 낸 작은 DXF 글. 사용자가 보내기에 동의할 때만 나간다.
+    excerpt: str = ""
 
 
 def import_dwg(
@@ -150,6 +158,7 @@ def import_dwg(
     extract_attribs: bool = True,
     join_text: bool = False,
     close_tolerance: float = 0.0,
+    close_tolerance_mm: float = 0.0,
     georef=None,
     keep_z: bool = False,
     skip_hidden: bool = False,
@@ -183,7 +192,7 @@ def import_dwg(
         asked = [name for name, wanted in (
             (tr("mapping profile"), profile is not None),
             (tr("text attaching"), bool(join_text)),
-            (tr("polygon closing"), bool(close_tolerance)),
+            (tr("polygon closing"), bool(close_tolerance or close_tolerance_mm)),
             (tr("georeferencing"), georef is not None),
             (tr("elevations"), bool(keep_z)),
         ) if wanted]
@@ -247,6 +256,10 @@ def import_dwg(
             # 인코딩을 OGR 과 맞춰야 한다. 한글 레이어 이름이 깨지면 엔티티의 레이어명과
             # 영영 안 맞아 거르기가 조용히 무효가 된다.
             hidden = layerstate.hidden_layers(source, utf8=utf8) if skip_hidden else set()
+            # 규칙 화면에서 체크를 끈 레이어(skip 규칙). 숨긴 레이어와 같은 길로 거르면 선·블록·
+            # 솔리드 어디서든 빠진다. 보고서에는 '규칙으로 뺌' 으로 따로 적는다.
+            excluded = _excluded_layers(source, utf8, profile)
+            hidden = hidden | excluded
             skipped: list[int] = [0]
             layers = _split_by_cad_layer(source, crs_id, feedback, profile, unmatched,
                                          keep_z=keep_z, hidden=hidden, skipped=skipped,
@@ -259,6 +272,10 @@ def import_dwg(
         dropped, view = _drop_broken_geometries(layers)
 
         # 거의 닫힌 선을 면으로. 문자 붙이기보다 먼저 해야 새로 생긴 면도 문자를 받는다.
+        # 가져오기 창은 mm 로 받는다(close_tolerance_mm) - 도면의 단위로 바꿔 쓴다. 단위가 없는
+        # 도면은 mm 로 본다(2026-09-23 지시 "단위는 mm 로 하고 필요하면 100mm 로 하면 되지").
+        if close_tolerance_mm and not close_tolerance:
+            close_tolerance = close_tolerance_mm / MM_PER_UNIT.get(drawing_units(source) or 4, 1.0)
         closed_rings = 0
         if close_tolerance and pro_closerings is not None and pro.unlocked():
             taken = {layer.name() for layer in layers.values()}
@@ -275,8 +292,10 @@ def import_dwg(
 
         # 정합은 마지막이다. 앞의 허용오차들이 도면 단위로 적혀 있으므로, 먼저 옮기면
         # 사용자가 적은 값과 실제로 적용되는 값이 어긋난다.
+        transform = None
         if georef is not None and pro_georef is not None and pro.unlocked():
-            pro_georef.apply(layers, georef, feedback=feedback)
+            transform = georef
+            pro_georef.apply(layers, transform, feedback=feedback)
 
         _apply_cad_colors(layers)
         _enable_text_labels(layers)
@@ -293,6 +312,17 @@ def import_dwg(
                                       acis_raw=acis_raw, acds_raw=acds_raw)
         else:
             solids_locked = acis_entity_count(source)
+        if solid_layer is not None and hidden:
+            # 솔리드도 숨긴·규칙으로 뺀 레이어면 뺀다. 안 그러면 선은 빠지고 솔리드만 남는다.
+            drop = [f.id() for f in solid_layer.getFeatures() if str(f["layer"] or "") in hidden]
+            if drop:
+                solid_layer.dataProvider().deleteFeatures(drop)
+                solid_layer.updateExtents()
+            if solid_layer.featureCount() == 0:
+                solid_layer = None
+        if solid_layer is not None and transform is not None:
+            # 솔리드는 위의 정합 뒤에 만들어진다 - 따로 옮긴다. 안 그러면 선만 지도에 가고 솔리드는 남는다.
+            pro_georef.apply({"solid": solid_layer}, transform, feedback=feedback)
         if solid_layer is not None:
             layers[(solid_layer.name(), "polygon")] = solid_layer
         # 키가 없거나 만료됐으면 블록 속성을 못 뽑는다. 조용히 넘기지 않고 적어 둔다.
@@ -307,11 +337,19 @@ def import_dwg(
             if hidden:
                 block_layers = [layer for layer in block_layers
                                 if not _all_from_hidden(layer, hidden)]
+            if transform is not None and block_layers:
+                pro_georef.apply({i: layer for i, layer in enumerate(block_layers)}, transform,
+                                 feedback=feedback)
 
         # 그릴 것이 없을 때 이유를 말하려면 원본을 아직 볼 수 있을 때 봐야 한다.
         # 아래 finally 가 임시 폴더를 지우므로 여기서 미리 본다 (2026-09-19 - 지운
         # 뒤에 보려다 "No entities" 만 나왔다).
         empty_kinds = _entity_kinds(source) if not layers else []
+
+        # 보고서의 기준(도면 원문)과 빠진 것의 원문도 원본이 있을 때 떠 둔다.
+        report_seed = _report_seed(dwg, source, utf8, list(layers.values()) + block_layers,
+                                   hidden, pro is not None and pro.unlocked(),
+                                   keep_source=solid_layer is not None, excluded=excluded)
 
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -348,7 +386,7 @@ def import_dwg(
         LayerResult(layer.name(), layer.name().rsplit("_blocks", 1)[0], "block", layer.featureCount())
         for layer in block_layers
     ]
-    return ImportResult(
+    result = ImportResult(
         file=dwg.name,
         status="ok",
         note=" / ".join(filter(None, [
@@ -371,7 +409,168 @@ def import_dwg(
         closed_rings=closed_rings,
         unmatched_layers=sorted(unmatched),
         elapsed_sec=time.monotonic() - started,
-    ), produced
+    )
+    _finish_report(result, report_seed)
+    return result, produced
+
+
+def _excluded_layers(source: Path, utf8: bool, profile) -> set[str]:
+    """프로파일에서 skip 규칙에 걸리는 도면 레이어 이름들."""
+    if profile is None or not any(rule.skip for rule in profile.rules):
+        return set()
+    return {name for name in layerstate.layer_colors(source, utf8=utf8)
+            if profile.rule_for(name)[0].skip}
+
+
+def _report_seed(dwg: Path, source: Path, utf8: bool, layers: list, hidden, pro_unlocked: bool,
+                 keep_source: bool, excluded=frozenset()) -> dict | None:
+    """보고서 재료를 원본이 지워지기 전에 모은다. 실패해도 가져오기는 계속된다."""
+    try:
+        from . import census, importreport
+
+        drawing = census.read(source, utf8=utf8)
+        handles = set()
+        for layer in layers:
+            if layer.fields().indexOf("cad_handle") < 0:
+                continue
+            for feature in layer.getFeatures():
+                handles.add(str(feature["cad_handle"] or ""))
+        seed = {"census": drawing, "handles": handles, "hidden": set(hidden or ()) - set(excluded),
+                "excluded": set(excluded),
+                "pro": pro_unlocked, "dxf_version": drawing.header_version}
+        if keep_source:
+            # 3D 각도 가져오기 보고서가 빠진 솔리드의 원문을 잘라 낼 수 있게 이 세션 동안만 둔다
+            remember_source(dwg.name, source)
+        return seed
+    except Exception:          # 보고서 때문에 가져오기를 망치지 않는다
+        return None
+
+
+def _finish_report(result: ImportResult, seed: dict | None) -> None:
+    if seed is None:
+        return
+    try:
+        from . import census, importreport
+
+        result.report = importreport.build_import_report(
+            result.file, seed["census"], seed["handles"], hidden_layers=seed["hidden"],
+            excluded_layers=seed.get("excluded", ()),
+            pro=seed["pro"], elapsed=result.elapsed_sec, layers=len(result.layers),
+            features=result.total_features, dropped=result.dropped_features,
+            notes=[result.note], dxf_version=seed["dxf_version"])
+        wanted = importreport.missing_handles(result.report)
+        if wanted:
+            result.excerpt, taken = census.excerpt(seed["census"], wanted)
+            result.report["attachable"] = len(taken)
+    except Exception:
+        result.report = None
+
+
+# 세션 동안 붙들어 둔 원본 DXF(솔리드가 든 도면만). 3D 각도 보고서의 첨부용.
+_SOURCES: dict[str, Path] = {}
+
+
+def remember_source(name: str, source: Path) -> None:
+    import atexit
+
+    keep = Path(tempfile.mkdtemp(prefix="echocad-src-"))
+    target = keep / Path(source).name
+    shutil.copyfile(source, target)
+    old = _SOURCES.get(name)
+    _SOURCES[name] = target
+    if old is not None:
+        shutil.rmtree(old.parent, ignore_errors=True)
+    atexit.register(shutil.rmtree, keep, True)
+
+
+# 규칙 화면이 보여 줄 도면 레이어 한 줄. kind 는 그 레이어에 가장 많은 것(line/area/text/block/dim/point).
+_KIND_GROUP = {
+    "LINE": "line", "LWPOLYLINE": "line", "POLYLINE": "line", "ARC": "line", "CIRCLE": "line",
+    "ELLIPSE": "line", "SPLINE": "line", "MLINE": "line", "XLINE": "line", "RAY": "line", "LEADER": "dim",
+    "HATCH": "area", "SOLID": "area", "3DFACE": "area", "REGION": "area", "3DSOLID": "area", "MESH": "area",
+    "TEXT": "text", "MTEXT": "text", "ATTDEF": "text", "INSERT": "block",
+    "DIMENSION": "dim", "MLEADER": "dim", "MULTILEADER": "dim", "TOLERANCE": "dim", "POINT": "point",
+}
+
+
+# 한 번 가져온 레이어들의 표시(레이어 사용자 속성). '지도에 맞추기' 가 같은 import_id 를 함께 옮긴다.
+DRAWING_KEY = "echocad/drawing"
+IMPORT_KEY = "echocad/import_id"
+
+
+# 도면 헤더 $INSUNITS - 도면의 숫자 1 이 무엇인가. 0 이면 설계자가 정하지 않은 것(단위 없음).
+UNIT_NAMES = {1: "in", 2: "ft", 3: "mi", 4: "mm", 5: "cm", 6: "m", 7: "km", 8: "µin", 9: "mil",
+              10: "yd", 11: "Å", 12: "nm", 13: "µm", 14: "dm", 15: "dam", 16: "hm", 17: "Gm",
+              18: "AU", 19: "ly", 20: "pc"}
+# 단위 하나가 몇 mm 인가 - 가져오기 창의 mm 값을 도면 단위로 바꿀 때 쓴다
+MM_PER_UNIT = {1: 25.4, 2: 304.8, 3: 1609344.0, 4: 1.0, 5: 10.0, 6: 1000.0, 7: 1e6, 8: 2.54e-5, 9: 0.0254,
+               10: 914.4, 11: 1e-7, 12: 1e-6, 13: 1e-3, 14: 100.0, 15: 1e4, 16: 1e5, 17: 1e12,
+               18: 1.495978707e14, 19: 9.4607304725808e18, 20: 3.0856775814914e19}
+
+
+def drawing_units(dxf: Path) -> int | None:
+    """DXF 헤더의 $INSUNITS 값. 없거나 읽지 못하면 None. 헤더만 본다(앞부분에서 끊는다)."""
+    try:
+        with Path(dxf).open("r", encoding="utf-8", errors="replace") as handle:
+            lines = []
+            for raw in handle:
+                value = raw.strip()
+                lines.append(value)
+                if len(lines) >= 3 and lines[-3] == "$INSUNITS":
+                    return int(value)
+                if value == "ENDSEC" and len(lines) > 4:
+                    return None
+                del lines[:-3]
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def drawing_info(path: Path, exe: Path | None = None) -> dict:
+    """도면의 {layers: [{name, count, kind, color}], units: $INSUNITS 또는 None}.
+
+    DWG 는 변환기로 잠깐 DXF 를 만들어 한 번에 읽는다(Pro). 읽지 못하면 빈 목록과 None.
+    """
+    from collections import Counter
+
+    from . import census
+
+    path = Path(path)
+    work = None
+    try:
+        if path.suffix.lower() == ".dxf":
+            source = path
+        elif engine is None:
+            return {"layers": [], "units": None}
+        else:
+            work = Path(tempfile.mkdtemp(prefix="echocad-layers-"))
+            converted = engine.convert(path, work / (path.stem + ".dxf"), exe=exe)
+            if converted.status != "ok":
+                return {"layers": [], "units": None}
+            source = converted.dxf
+        utf8 = dxfenc.content_is_utf8(source)
+        colors = layerstate.layer_colors(source, utf8=utf8)
+        counts: dict[str, Counter] = {}
+        for e in census.read(source, utf8=utf8).entities:
+            counts.setdefault(e.layer, Counter())[_KIND_GROUP.get(e.kind, "other")] += 1
+        layers = [{"name": name, "count": sum(c.values()), "kind": c.most_common(1)[0][0],
+                   "color": colors.get(name, "#9a9ea8")} for name, c in counts.items()]
+        return {"layers": layers, "units": drawing_units(source)}
+    except Exception:
+        return {"layers": [], "units": None}
+    finally:
+        if work is not None:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def drawing_layers(path: Path, exe: Path | None = None) -> list[dict]:
+    """도면의 레이어마다 {name, count, kind, color}. 개체가 없는 레이어는 뺀다."""
+    return drawing_info(path, exe)["layers"]
+
+
+def remembered_source(name: str) -> Path | None:
+    path = _SOURCES.get(name)
+    return path if path is not None and path.exists() else None
 
 
 def _split_by_cad_layer(dxf: Path, crs_id: str, feedback, profile=None, unmatched=None,
@@ -611,8 +810,14 @@ def _fill_buckets(entities, buckets, taken, linetype_table, hatch_table,
         copied["text_size"] = style.size
         copied["text_angle"] = style.angle
         copied["text_quad"] = style.quadrant
-        copied["text_dx"] = style.dx
-        copied["text_dy"] = style.dy
+        dx, dy = style.dx, style.dy
+        if (dx or dy) and _offset_to_origin(geometry, dx, dy):
+            # 기본 맞춤(왼쪽·기준선) 글자는 정렬점(그룹 11)이 (0,0) 으로 비어 있다. GDAL 은 그 빈 점까지를
+            # 어긋남으로 적어, 글자가 도면 원점 쪽으로 몰렸다(2026-09-23 building-a-floor0 의 ATTRIB).
+            # 어긋남이 정확히 '삽입점 → 원점' 이면 진짜 어긋남이 아니다 - 버린다.
+            dx, dy = 0.0, 0.0
+        copied["text_dx"] = dx
+        copied["text_dy"] = dy
         if not target.dataProvider().addFeature(copied):
             # 넣기가 실패하면 그 도형은 사라진다. 세지 않으면 아무도 모른다 -
             # 위의 Z 문제를 이 숫자가 없어서 오래 못 봤다.
@@ -959,6 +1164,16 @@ def _use_lineweight_units(symbol_layer) -> None:
             return
 
 
+def _offset_to_origin(geometry, dx: float, dy: float) -> bool:
+    """글자 어긋남이 삽입점에서 도면 원점(0,0)까지와 같은가 - 비어 있는 정렬점을 GDAL 이 옮겨 적은 것."""
+    if geometry is None or geometry.isEmpty():
+        return False
+    point = geometry.vertexAt(0)
+    # OGR 스타일 문자열의 숫자는 몇 자리에서 잘려 온다(-20.6334) - 그만큼은 봐준다
+    tolerance = max(1e-3, 1e-5 * max(abs(point.x()), abs(point.y())))
+    return abs(point.x() + dx) <= tolerance and abs(point.y() + dy) <= tolerance
+
+
 def _enable_text_labels(buckets) -> None:
     """TEXT·MTEXT 내용을 원본 크기·각도·색으로 화면에 띄운다.
 
@@ -988,7 +1203,9 @@ def _enable_text_labels(buckets) -> None:
 
         properties = settings.dataDefinedProperties()
         properties.setProperty(QgsPalLayerSettings.Property.Size, QgsProperty.fromField("text_size"))
-        properties.setProperty(QgsPalLayerSettings.Property.LabelRotation, QgsProperty.fromField("text_angle"))
+        # CAD 의 글자 각도는 반시계, QGIS 라벨 회전은 시계 방향이다 - 부호를 뒤집어야 도면과 같게 선다
+        # (2026-09-23 렌더 시험으로 확인. 전에는 기울어진 글자가 반대로 기울었다).
+        properties.setProperty(QgsPalLayerSettings.Property.LabelRotation, QgsProperty.fromExpression('-"text_angle"'))
         properties.setProperty(QgsPalLayerSettings.Property.Color, QgsProperty.fromField("color"))
         # 삽입점 기준 글자 방향과 오프셋도 원본을 따른다.
         properties.setProperty(QgsPalLayerSettings.Property.OffsetQuad, QgsProperty.fromField("text_quad"))
@@ -1054,6 +1271,125 @@ def _new_memory_layer(cad_layer: str, suffix: str, wkb_name: str, crs_id: str, t
     return QgsVectorLayer(f"{wkb_name}?crs={crs_id}{_FIELDS}", name, "memory")
 
 
+def _closed(ring):
+    """첫 점을 끝에 붙인 닫힌 고리. 이미 닫혀 있으면 그대로."""
+    ring = list(ring)
+    if ring and ring[0] != ring[-1]:
+        ring.append(ring[0])
+    return ring
+
+
+def _mesh_face(face) -> list[list[list[tuple[float, float, float]]]]:
+    """면 하나를 곡면 위의 거의 평평한 조각들로. 조각 = [바깥 고리, 구멍 고리, …] (3D).
+
+    tessellate 가 만든 (u,v) 영역을 격자로 자르고(GEOS) 칸마다 나온 다각형을 곡면
+    point(u,v) 로 되돌린다. 평면은 자를 필요가 없고, 원기둥은 각도 방향만, 구·토러스는
+    두 방향 다 자른다. 곡면을 못 읽은 면은 경계 고리를 그대로 평면으로 둔다.
+
+    감김 방향은 곡면 법선(sense 를 곱한 것)과 맞춰 바깥을 향하게 한다 - 닫힌 솔리드의
+    부피가 양수인지로 검증한다(tests).
+    """
+    from . import tessellate
+
+    surf = face.surface
+    regions = tessellate.face_regions(face) if surf is not None else []
+    if not regions:
+        # 곡면 정의가 없다(옛 SAT) - 경계만이라도 평면으로 그린다
+        return [[list(ring) for ring in face.loops]] if face.loops else []
+
+    outward = -1.0 if face.sense else 1.0
+    pieces = []
+    for region in regions:
+        for uv_rings in _grid_pieces(surf, region):
+            rings3 = [[surf.point(u, v) for (u, v) in ring] for ring in uv_rings]
+            rings3 = [_dedupe(r) for r in rings3]
+            if len(rings3[0]) < 3:
+                continue
+            uc = sum(p[0] for p in uv_rings[0]) / len(uv_rings[0])
+            vc = sum(p[1] for p in uv_rings[0]) / len(uv_rings[0])
+            want = surf.normal(uc, vc)
+            have = _newell(rings3[0])
+            if _length(have) < 1e-12:
+                continue                          # 토러스 축 위처럼 한 점으로 모인 칸
+            if (want[0] * have[0] + want[1] * have[1] + want[2] * have[2]) * outward < 0:
+                rings3 = [list(reversed(r)) for r in rings3]
+            pieces.append(rings3)
+    return pieces
+
+
+def _dedupe(ring):
+    out = []
+    for p in ring:
+        if not out or any(abs(p[i] - out[-1][i]) > 1e-9 for i in range(3)):
+            out.append(p)
+    if len(out) > 1 and all(abs(out[0][i] - out[-1][i]) <= 1e-9 for i in range(3)):
+        out.pop()
+    return out
+
+
+def _length(v):
+    return (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) ** 0.5
+
+
+def _newell(ring):
+    nx = ny = nz = 0.0
+    n = len(ring)
+    for i in range(n):
+        a, b = ring[i], ring[(i + 1) % n]
+        nx += (a[1] - b[1]) * (a[2] + b[2])
+        ny += (a[2] - b[2]) * (a[0] + b[0])
+        nz += (a[0] - b[0]) * (a[1] + b[1])
+    return (nx, ny, nz)
+
+
+def _grid_pieces(surf, region):
+    """(u,v) 영역을 곡면이 정한 칸 크기로 자른다. 칸마다 [바깥, 구멍…] 고리를 준다."""
+    outer = region[0]
+    us = [p[0] for p in outer]
+    vs = [p[1] for p in outer]
+    du, dv = surf.steps(max(us) - min(us), max(vs) - min(vs))
+    if du is None and dv is None:
+        return [region]
+
+    poly = QgsGeometry.fromPolygonXY([[QgsPointXY(u, v) for (u, v) in ring] for ring in region])
+    if not poly.isGeosValid():
+        poly = poly.makeValid()
+    box = poly.boundingBox()
+    if poly.isEmpty() or box.isNull() or not math.isfinite(box.width() + box.height()):
+        return [region]
+    u_lines = _lines(box.xMinimum(), box.xMaximum(), du)
+    v_lines = _lines(box.yMinimum(), box.yMaximum(), dv)
+    out = []
+    for i in range(len(u_lines) - 1):
+        for j in range(len(v_lines) - 1):
+            cell = QgsGeometry.fromRect(QgsRectangle(u_lines[i], v_lines[j], u_lines[i + 1], v_lines[j + 1]))
+            piece = poly.intersection(cell)
+            # 영역 변이 격자선과 겹치면 두께 0 의 부스러기가 나온다 - 버린다
+            if piece.isEmpty() or piece.area() < cell.area() * 1e-6:
+                continue
+            for part in piece.asGeometryCollection() if piece.isMultipart() else [piece]:
+                if QgsWkbTypes.geometryType(part.wkbType()) != QgsWkbTypes.PolygonGeometry:
+                    continue                      # 경계에 스친 선·점
+                rings = part.asPolygon()
+                if not rings or len(rings[0]) < 4:
+                    continue
+                out.append([[(pt.x(), pt.y()) for pt in ring[:-1]] for ring in rings])
+    return out
+
+
+def _lines(lo: float, hi: float, step) -> list[float]:
+    """[lo, hi] 를 step 간격으로 자르는 선들. step 이 None 이면 자르지 않는다."""
+    if step is None or step <= 0:
+        return [lo - 1.0, hi + 1.0]
+    start = math.floor(lo / step) * step
+    lines = []
+    x = start
+    while x < hi + step:
+        lines.append(x)
+        x += step
+    return lines
+
+
 def _acis_layer(dxf: Path, crs_id: str, taken: set[str], acis_raw: Path | None = None,
                 acds_raw: Path | None = None):
     """도면에 든 3차원 솔리드(ACIS)를 면 레이어로 만든다.
@@ -1069,21 +1405,39 @@ def _acis_layer(dxf: Path, crs_id: str, taken: set[str], acis_raw: Path | None =
     bodies = acis.sat_bodies(dxf)
     # 원본이 어디 있는지는 도면마다 다르다. R2013+ 라도 어떤 도면은 엔티티에,
     # 어떤 도면은 AcDs 절에만 있다. 한쪽이 비면 다른 쪽을 본다.
-    polys = acis.raw_faces(Path(acis_raw)) if (acis_raw is not None
-                                               and Path(acis_raw).exists()) else []
-    if not polys and acds_raw is not None and Path(acds_raw).exists():
-        for recs in acis.sab_bodies(Path(acds_raw)):
-            polys += acis.sab_faces(recs)
-    if polys:
-        entities = [(bodies[0][0] if bodies else "", polys)]
-    else:
+    #   entries 는 (핸들, 도면층, 색, 면 목록) 이고 면은 (조각들, 곡면 종류, 면 색) 다.
+    entries: list[tuple[str, str, str, list]] = []
+    raw = Path(acis_raw) if acis_raw is not None and Path(acis_raw).exists() else None
+    acds = Path(acds_raw) if acds_raw is not None and Path(acds_raw).exists() else None
+    sab = raw if raw is not None and acis.is_sab(raw) else acds
+    if sab is not None:
+        # 이진 ACIS - 곡면 정의까지 읽어 어떤 면이든 곡면 위에서 조각낸다.
+        solids = acis.sab_bodies(sab)
+        styles = acis.entity_styles(dxf, len(solids))
+        for i, recs in enumerate(solids):
+            handle, layer, color = styles[i]
+            entries.append((handle, layer, color,
+                            [(_mesh_face(face), face.kind, face.color) for face in acis.sab_face_topology(recs)]))
+    elif raw is not None:
+        # 글자 SAT(R14·R2000) - 곡면 정의가 없어 경계 고리를 평면으로 그린다.
+        polys = acis.raw_faces(raw)
+        if polys:
+            # 원본 덩이는 솔리드별로 나뉘어 있지 않아 한 덩이로 들어온다. 도면 안
+            # 모든 솔리드가 같은 도면층·색이면 그 값을 그대로 쓸 수 있지만, 섞여
+            # 있으면 어느 면이 어느 것인지 가릴 길이 없다 - 그때는 비워 둔다.
+            styles = {(layer, color) for _, layer, color in acis.entity_styles(dxf, len(bodies))}
+            layer, color = styles.pop() if len(styles) == 1 else ("", "")
+            entries = [(bodies[0][0] if bodies else "", layer, color,
+                        [([rings], "", None) for rings in polys])]
+    if not entries:
         # DXF 를 직접 읽는 길이다(무료판, 또는 원본을 못 받았을 때). 여기 SAT 는
         # AutoCAD 가 쓴 것이면 번호가 스스로 맞고, LibreDWG 가 다시 쓴 것이면 어긋난다.
         # 그래도 옛 걷기(종류로 짐작하는 것)보다 이쪽이 낫다 - 실측 13면/퇴화 4 에서
         # 13면/퇴화 0 이 됐다(2026-09-19, 실제 AutoCAD R2000 DXF).
-        entities = [(handle, acis.raw_sat_faces("\n".join(lines)))
-                    for handle, lines in bodies]
-    if not any(p for _, p in entities):
+        entries = [(handle, "", "",
+                    [([rings], "", None) for rings in acis.raw_sat_faces("\n".join(lines))])
+                   for handle, lines in bodies]
+    if not any(e[3] for e in entries):
         return None
 
     layer = QgsVectorLayer(f"MultiPolygonZ?crs={crs_id}", "", "memory")
@@ -1094,29 +1448,34 @@ def _acis_layer(dxf: Path, crs_id: str, taken: set[str], acis_raw: Path | None =
         QgsField("solid", QVariant.String),       # 몇 번째 솔리드인가
         QgsField("face", QVariant.Int),          # 그 안에서 몇 번째 면인가
         QgsField("surface", QVariant.String),    # 평면/원뿔/토러스/…
+        QgsField("layer", QVariant.String),      # 원본 도면층 이름
+        QgsField("color", QVariant.String),      # 원본 색 (#rrggbb)
     ])
     layer.updateFields()
 
     features = []
-    for index, (handle, polygons) in enumerate(entities):
-        for face_no, rings in enumerate(polygons, start=1):
-            if not rings or len(rings[0]) < 4:
-                continue
+    for index, (handle, cad_layer, cad_color, polygons) in enumerate(entries):
+        for face_no, (pieces, kind, face_color) in enumerate(polygons, start=1):
+            # 면 하나 = 곡면 위의 거의 평평한 조각 여럿. 조각마다 바깥 고리 + 구멍.
             # Z 를 살려야 하므로 XY 평면 함수가 아니라 QgsPolygon 을 직접 만든다.
-            # rings[0] 이 바깥, 나머지가 구멍이다. 구멍을 빼면 면이 메워진다.
-            shape = QgsPolygon()
-            shape.setExteriorRing(
-                QgsLineString([QgsPoint(p[0], p[1], p[2]) for p in rings[0]]))
-            for hole in rings[1:]:
-                if len(hole) >= 4:
-                    shape.addInteriorRing(
-                        QgsLineString([QgsPoint(p[0], p[1], p[2]) for p in hole]))
-            geometry = QgsGeometry(shape)
+            multi = QgsMultiPolygon()
+            for rings in pieces:
+                if not rings or len(rings[0]) < 3:
+                    continue
+                shape = QgsPolygon()
+                shape.setExteriorRing(QgsLineString([QgsPoint(p[0], p[1], p[2]) for p in _closed(rings[0])]))
+                for hole in rings[1:]:
+                    if len(hole) >= 3:
+                        shape.addInteriorRing(QgsLineString([QgsPoint(p[0], p[1], p[2]) for p in _closed(hole)]))
+                multi.addGeometry(shape)
+            geometry = QgsGeometry(multi)
             if geometry.isEmpty():
                 continue
             feature = QgsFeature(layer.fields())
             feature.setGeometry(geometry)
-            feature.setAttributes([handle, "3DSOLID", f"ACIS{index + 1}", face_no, ""])
+            # 면에 따로 칠한 색이 있으면 그것이 엔티티 색을 이긴다(AutoCAD 규칙)
+            feature.setAttributes([handle, "3DSOLID", f"ACIS{index + 1}", face_no, kind,
+                                   cad_layer, face_color or cad_color])
             features.append(feature)
     if not features:
         return None

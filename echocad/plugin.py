@@ -6,12 +6,6 @@ from qgis.PyQt.QtWidgets import QAction
 from .i18n import tr
 from .ui.import_dialog import ImportDialog
 
-# 무료판은 DXF 만 읽으므로 변환기 설정 화면이 아예 없다.
-try:
-    from .ui.engine_setup import EngineSetupDialog
-except ImportError:      # 무료판
-    EngineSetupDialog = None
-
 def _menu_label() -> str:
     """무료판과 유료판은 플러그인 ID가 달라 함께 설치될 수 있다. 메뉴로 구분한다."""
     try:
@@ -34,8 +28,6 @@ class EchoCadPlugin:
 
     def initGui(self):
         self._add_action(tr("Import drawing…"), self._open_import)
-        if EngineSetupDialog is not None:
-            self._add_action(tr("Converter setup…"), self._open_engine_setup)
         # Community 빌드에는 pro/ 폴더가 없어 이 메뉴와 알고리즘이 생기지 않는다.
         # 대신 Pro 안내를 띄운다 - 이게 없으면 Pro 가 있다는 것조차 알 길이 없다.
         try:
@@ -43,6 +35,11 @@ class EchoCadPlugin:
         except ImportError:
             self._add_action(tr("What Pro adds…"), self._open_pro_info)
             return
+        # 메뉴는 넷만 둔다. 변환 엔진 설정은 Pro 에 변환기가 동봉돼 있어 쓸 일이 없고,
+        # 없어졌다면 가져오기가 그 창을 스스로 띄운다. '이 각도로 가져오기' 는 3차원 창
+        # 안에 같은 단추가 있어 겹친다(2026-09-25 지시 "필요없는건 지워").
+        self._add_action(tr("Show in 3D…"), self._open_3d_view)
+        self._add_action(tr("Align to map…"), self._align_to_map)
         self._add_action(tr("Licence…"), self._open_license)
 
         # 새 버전이 나왔는지 여기서 확인한다. 네트워크는 비동기라 시작을 막지 않는다.
@@ -76,8 +73,15 @@ class EchoCadPlugin:
     def _open_import(self):
         ImportDialog(self.iface.mainWindow()).exec()
 
-    def _open_engine_setup(self):
-        EngineSetupDialog(self.iface.mainWindow()).exec()
+    def _open_3d_view(self):
+        from .ui import view3d
+
+        view3d.open_3d_view(self.iface, self.iface.mainWindow())
+
+    def _align_to_map(self):
+        from .pro import align_tool
+
+        align_tool.start(self.iface)
 
     def _open_license(self):
         from .pro.license_dialog import LicenseDialog

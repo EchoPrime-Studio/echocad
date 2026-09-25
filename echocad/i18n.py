@@ -45,13 +45,50 @@ def available() -> list[str]:
 
 
 def _locale() -> str:
-    """QGIS가 설정한 UI 언어의 두 글자 코드. QGIS가 없으면 빈 문자열."""
+    """QGIS가 설정한 UI 언어의 두 글자 코드. 영어거나 QGIS가 못 보여 주면 빈 문자열.
+
+    **QGIS 가 그 언어를 실제로 보여 줄 수 있을 때만** 우리도 번역한다. QGIS 설치본에
+    번역 파일이 없으면 QGIS 화면은 영어로 나오는데, 우리만 번역하면 메뉴가 뒤섞여
+    보인다 - QGIS 4.2 에는 한국어 파일(`qgis_ko.qm`)이 없어서 실제로 그렇게 됐다
+    (2026-09-25 지적 "한글이면 한글 영어면 영어 그 설정에 맞게").
+    """
     try:
         from qgis.PyQt.QtCore import QSettings
     except ImportError:
         return ""
-    value = QSettings().value("locale/userLocale") or ""
-    return str(value)[:2].lower()
+    code = str(QSettings().value("locale/userLocale") or "")[:2].lower()
+    if not code or code == "en":
+        return ""
+    # 설정값만 믿으면 안 된다. QGIS 4.2 는 userLocale=ko_KR 이고 qgis_ko.qm 도 있는데
+    # 화면은 영어로 나온다(2026-09-25 확인). 화면에 실제로 보이는 것을 기준으로 삼는다.
+    if _qgis_is_showing_english():
+        return ""
+    return code
+
+
+_ENGLISH_MENUS = {"Project", "Edit", "View", "Layer", "Settings", "Plugins", "Vector",
+                  "Raster", "Database", "Web", "Mesh", "Processing", "Window", "Help"}
+
+
+def _qgis_is_showing_english() -> bool:
+    """QGIS 화면이 지금 영어인가. 창이 없으면 알 수 없으므로 False(막지 않는다).
+
+    메뉴 이름을 본다 - 다른 언어로 나오면 그 낱말들이 영어가 아니다. 번역 파일이 있어도
+    QGIS 가 그것을 못 읽는 때가 있어서(4.2), 설정이 아니라 화면을 본다.
+    """
+    try:
+        import qgis.utils
+
+        iface = qgis.utils.iface
+        if iface is None:
+            return False
+        titles = {action.text().replace("&", "")
+                  for action in iface.mainWindow().menuBar().actions()}
+    except Exception:
+        return False
+    if not titles:
+        return False
+    return len(titles & _ENGLISH_MENUS) >= 3
 
 
 def tr(text: str) -> str:

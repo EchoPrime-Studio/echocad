@@ -6,7 +6,7 @@ qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 description=Import DXF drawings into QGIS with CAD layers, colours, line types, hatch patterns and text intact. DWG is opened directly by EchoCad Pro.
 about=EchoCad reads DXF drawings the way they were drawn: one QGIS layer per CAD layer, entity colour, line type and line width carried over, hatch patterns rebuilt from the drawing's own definitions, and text at its original size, rotation and colour. Everything runs locally - drawings never leave your machine. QGIS itself cannot open DWG files newer than the 2000 format. This free edition reads DXF (save as DXF from the CAD you use). EchoCad Pro opens DWG (R14 to 2018 and newer) directly in QGIS with a bundled converter, works offline on closed networks, and adds block attribute extraction, batch folder conversion and layer mapping profiles: https://echocad.pages.dev. The interface follows your QGIS language: English, German, Spanish, French, Italian, Japanese, Korean, Polish, Portuguese and Chinese are included.
-version=0.2.1
+version=0.2.2
 author=EchoPrime Studio
 email=echoprime.studio@gmail.com
 homepage=https://echocad.pages.dev/dxf
@@ -18,7 +18,20 @@ tags=dwg,dxf,cad,autocad,import,conversion,drawing
 category=Vector
 experimental=False
 deprecated=False
-changelog=0.2.1
+changelog=0.2.2
+    - 3D view: pick parallel or perspective projection - the flat drawing you
+      take comes out the same way, so it matches what you see - EchoCad Pro
+    - Import: when a drawing has 3D solids, choose whether to turn the model
+      in 3D or bring in the flat shapes only
+    - Import: a progress bar now shows while the DWG converter runs
+    - Import: warns when a metric drawing would land in a degrees project
+    - Import: a missing file is named instead of showing a converter error
+    - Import report: says exactly why a block reference was left out
+    - Align to map: says so when there is no map to align to yet
+    - Align to map: no longer closes QGIS when its window is shut
+    - The interface follows the language QGIS is actually showing
+    - Menu trimmed to the four items you need
+    0.2.1
     - Draw 3D solids (3DSOLID, REGION, BODY) as faces, with curved surfaces
       and holes - EchoCad Pro
     - Import dialog now leads with what this edition does, and hides the

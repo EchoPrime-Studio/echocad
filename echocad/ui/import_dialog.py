@@ -1,6 +1,7 @@
 # DWG 한 장을 QGIS로 가져오는 다이얼로그. 파일·좌표계·출력만 받고 나머지는 importer가 한다
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 from qgis.core import QgsCoordinateReferenceSystem, QgsProject, QgsRectangle
@@ -8,14 +9,15 @@ from qgis.gui import QgsProjectionSelectionWidget
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QPalette
 from qgis.PyQt.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox,
-    QProgressBar, QPushButton,
+    QProgressBar, QPushButton, QToolButton,
     QVBoxLayout, QWidget,
 )
 
 from .. import importer
 from ..i18n import tr
+from ..importer import DRAWING_KEY, IMPORT_KEY
 from ..links import PRO_URL
 
 # 변환 엔진은 무료판 빌드에 없다. 무료판은 DXF 만 읽으므로 엔진을 찾을 일도,
@@ -56,7 +58,24 @@ def _theme_style() -> str:
     """
     text = "#e8e8e8" if _is_dark() else "#1c1c1c"
     dim = "#a8a8a8" if _is_dark() else "#6f6f6f"
-    return (
+    # 어두운 테마에서 체크 칸이 바탕과 같은 색이라 안 보였다(2026-09-23 지시). 테두리를 밝게 긋고,
+    # 체크하면 파란 칸에 흰 표시를 그린다. 밝은 테마는 기본 모양이 잘 보여 건드리지 않는다.
+    check = ""
+    if _is_dark():
+        mark = (Path(__file__).parent / "check.svg").as_posix()
+        check = (
+            "QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #9aa0a8; "
+            "border-radius: 3px; background: #1b1c1f; }"
+            "QCheckBox::indicator:hover { border-color: #c8ccd2; }"
+            f"QCheckBox::indicator:checked {{ background: #4c8dff; border-color: #4c8dff; image: url({mark}); }}"
+            "QCheckBox::indicator:disabled { border-color: #555a61; }"
+            # 입력 칸도 테두리가 바탕에 묻혔다(허용오차·기준점 칸, 2026-09-23 지시)
+            "QLineEdit { border: 1px solid #6b7078; border-radius: 4px; background: #1b1c1f; padding: 3px 6px; }"
+            "QLineEdit:hover { border-color: #8a9099; }"
+            "QLineEdit:focus { border-color: #4c8dff; }"
+            "QLineEdit:disabled { border-color: #45484e; }"
+        )
+    return check + (
         f"QLabel, QCheckBox, QGroupBox, QRadioButton {{ color: {text}; }}"
         f"QLineEdit, QComboBox, QAbstractSpinBox {{ color: {text}; }}"
         f"QPushButton, QToolButton {{ color: {text}; }}"
@@ -74,6 +93,7 @@ _PITCH = tr(
     "\n"
     "  \u2713 DWG drawings opened directly \u2014 R14 to 2018, offline\n"
     "  \u2713 3D solids \u2014 faces with their curved surfaces and holes\n"
+    "  \u2713 3D view \u2014 turn the model, then take a flat drawing from that angle\n"
     "  \u2713 Elevations, text, block attributes, georeference, whole folders\n"
     "\n"
     "{url}"
@@ -87,6 +107,15 @@ def _text_color() -> str:
     읽혀야 한다 - 주황은 정말 주의가 필요한 곳에만 남긴다.
     """
     return "#e8e8e8" if _is_dark() else "#1c1c1c"
+
+
+def _warn_color() -> str:
+    """정말 주의가 필요한 곳에만 쓰는 주황. 좌표계가 어긋날 때 쓴다."""
+    return "#ffb020" if _is_dark() else "#b45309"
+
+
+# DXF $INSUNITS 중 야드파운드법. 이것만 미터법 경고에서 뺀다 (importer.UNIT_NAMES 참조).
+_IMPERIAL_UNITS = {1, 2, 3, 8, 9, 10}
 
 
 def _hline() -> QFrame:
@@ -105,6 +134,10 @@ class _DialogFeedback:
         self.canceled = False
 
     def setProgress(self, percent: int):
+        # 변환 단계는 얼마나 걸릴지 모른다 - 그동안은 지나가는 막대(range 0,0)로 두고,
+        # 읽기 단계에 들어와 처음 숫자가 오면 그때 퍼센트 막대로 바꾼다.
+        if self._bar.maximum() == 0:
+            self._bar.setRange(0, 100)
         self._bar.setValue(percent)
         QApplication.processEvents()
 
@@ -148,27 +181,26 @@ class ImportDialog(QDialog):
         self.crs_widget = QgsProjectionSelectionWidget()
         self.crs_widget.setCrs(QgsProject.instance().crs())
         form.addRow(tr("Coordinate system"), self.crs_widget)
+        # 도(degree) 단위 좌표계에 미터 도면을 그대로 넣는 것을 막는다. 새 프로젝트의 기본이
+        # EPSG:4326 이라 미숙한 사용자는 그냥 [OK] 를 누르고, 그러면 평면도가 도 단위 좌표계에
+        # 들어가 축척이 1:10,000,000 처럼 나오고 지도에 맞추기도 뜻이 없어진다
+        # (2026-09-25 구매자 점검에서 실제로 그랬다).
+        self.crs_warning = QLabel(tr(
+            "This project is in degrees, but drawings are in metres. Choose the coordinate "
+            "system the drawing was made in — otherwise it lands in the wrong place."))
+        self.crs_warning.setWordWrap(True)
+        self.crs_warning.setStyleSheet(f"QLabel {{ color: {_warn_color()}; }}")
+        self.crs_warning.setVisible(False)
+        form.addRow("", self.crs_warning)
+        self.crs_widget.crsChanged.connect(self._refresh_crs_warning)
 
-        self.save_check = QCheckBox(tr("Save to GeoPackage (unchecked: temporary layers)"))
-        form.addRow("", self.save_check)
-
-        output = QHBoxLayout()
-        self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText(tr("Path of the .gpkg to write"))
-        self.output_edit.setEnabled(False)
-        output_browse = QPushButton(tr("Save location…"))
-        output_browse.setEnabled(False)
-        output_browse.clicked.connect(self._browse_output)
-        self.save_check.toggled.connect(self.output_edit.setEnabled)
-        self.save_check.toggled.connect(output_browse.setEnabled)
-        output.addWidget(self.output_edit)
-        output.addWidget(output_browse)
-        form.addRow(tr("GeoPackage"), output)
-
+        # 파일(GeoPackage)로 저장하는 칸은 두지 않는다. 가져온 레이어는 QGIS 에서 바로 내보낼 수 있고,
+        # 여러 도면을 파일로 한꺼번에 바꾸는 일은 처리 도구(Batch import DWG)가 한다(2026-09-23 지시).
         # 두 판 모두에 있다. 가져오기 자체를 다듬는 것이라 유료로 둘 이유가 없다.
         self.hidden_check = QCheckBox(tr("Skip layers switched off or frozen in the drawing"))
         form.addRow(tr("Layers"), self.hidden_check)
         layout.addLayout(form)
+        self._top_form = form
 
         layout.addWidget(_hline())
 
@@ -214,14 +246,30 @@ class ImportDialog(QDialog):
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(6)
         self._profile_row(controls)
-        self._text_row(controls)
-        self._georef_row(controls)
+        # 나머지 Pro 옵션은 늘 쓰는 것이 아니다. 접어 두고 필요할 때 편다(2026-09-23 목업 ①).
+        self.advanced_toggle = QToolButton()
+        self.advanced_toggle.setText(tr("Advanced options"))
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setAutoRaise(True)
+        self.advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        controls.addWidget(self.advanced_toggle)
+        self.advanced = QWidget()
+        advanced = QVBoxLayout(self.advanced)
+        advanced.setContentsMargins(18, 0, 0, 0)
+        advanced.setSpacing(6)
+        self._text_row(advanced)
+        self.advanced.setVisible(False)
+        self.advanced_toggle.toggled.connect(self._show_advanced)
+        controls.addWidget(self.advanced)
         pro.addWidget(self.pro_controls)
 
         layout.addWidget(self.pro_box)
 
         # 파일을 고르면 그 자리에서 3차원 솔리드 개수를 세어 보여 준다.
         self.source_edit.textChanged.connect(self._refresh_pro_count)
+        self.source_edit.textChanged.connect(self._refresh_rule_summary)
+        self.source_edit.textChanged.connect(self._refresh_crs_warning)
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -241,6 +289,17 @@ class ImportDialog(QDialog):
 
         self._feedback: _DialogFeedback | None = None
         self._lock_pro_widgets()
+        self._align_rule_label(pro)
+
+    def _align_rule_label(self, pro_layout):
+        """'레이어 이름' 라벨의 오른쪽 끝을 위 칸들의 라벨과 맞춘다(Pro 테두리 안이라 그만큼 뺀다)."""
+        widths = [self._top_form.itemAt(i, QFormLayout.ItemRole.LabelRole).widget().sizeHint().width()
+                  for i in range(self._top_form.rowCount())
+                  if self._top_form.itemAt(i, QFormLayout.ItemRole.LabelRole) is not None]
+        inset = pro_layout.contentsMargins().left() + self.pro_box.contentsMargins().left()
+        if widths:
+            self._rules_label.setMinimumWidth(max(max(widths) - inset, 0))
+            self._rules_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
     def _lock_pro_widgets(self):
         """유료 칸을 못 쓰게 하고 이유를 보여 준다.
@@ -280,14 +339,11 @@ class ImportDialog(QDialog):
             why = licensing.decide(pro.build_date()).reason
             hint = f"{hint}\n\n{why}"
 
-        for name in ("profile_edit", "text_check", "z_check", "close_edit"):
+        for name in ("profile_combo", "text_check", "z_check", "close_edit"):
             widget = getattr(self, name, None)
             if widget is not None:
                 widget.setEnabled(False)
                 widget.setToolTip(why)
-        for edit in (getattr(self, "georef_edits", None) or []):
-            edit.setEnabled(False)
-            edit.setToolTip(why)
         for button in (getattr(self, "profile_buttons", None) or []):
             button.setEnabled(False)
             button.setToolTip(why)
@@ -338,10 +394,15 @@ class ImportDialog(QDialog):
         """
         self.close_edit = QLineEdit()
         self.close_edit.setPlaceholderText(tr(
-            "Close almost-closed polylines into polygons - gap tolerance in drawing units "
+            "Close almost-closed polylines into polygons - the gap in mm, decimals allowed "
             "(empty: off)"))
         layout.addWidget(QLabel(tr("Polygon tolerance (optional)")))
-        layout.addWidget(self.close_edit)
+        # 칸 뒤에 mm 를 붙인다. 가져올 때 도면의 단위로 바꿔 쓴다(importer close_tolerance_mm).
+        self.close_unit = QLabel("mm")
+        row = QHBoxLayout()
+        row.addWidget(self.close_edit, 1)
+        row.addWidget(self.close_unit)
+        layout.addLayout(row)
 
         self.z_check = QCheckBox(tr("Keep elevations (Z) from the drawing"))
         self.z_check.setToolTip(tr(
@@ -349,47 +410,11 @@ class ImportDialog(QDialog):
             "Without this the layers are flattened."))
         layout.addWidget(self.z_check)
 
-        self.text_check = QCheckBox(tr("Attach drawing text to the shapes it labels"))
+        self.text_check = QCheckBox(tr("Put text inside a shape into that shape's attribute (label)"))
         self.text_check.setToolTip(tr(
-            "A text inside a polygon becomes that polygon's label. Otherwise it goes to the "
-            "nearest shape. The value lands in a 'label' field."))
+            "Text inside a closed shape goes into that shape's label attribute. Text outside any "
+            "shape goes into the label attribute of the nearest shape."))
         layout.addWidget(self.text_check)
-
-    def _georef_row(self, layout):
-        """도면좌표를 실좌표로 옮길 기준점 두 쌍. 무료판에는 잠가 둔다."""
-        layout.addWidget(QLabel(tr("Georeference from two reference points (optional)")))
-        grid = QGridLayout()
-        for column, title in enumerate(
-                [tr("drawing X"), tr("drawing Y"), tr("real X"), tr("real Y")]):
-            grid.addWidget(QLabel(title), 0, column + 1)
-
-        self.georef_edits = []
-        for row in range(2):
-            grid.addWidget(QLabel(tr("Point {number}").format(number=row + 1)), row + 1, 0)
-            for column in range(4):
-                edit = QLineEdit()
-                grid.addWidget(edit, row + 1, column + 1)
-                self.georef_edits.append(edit)
-        layout.addLayout(grid)
-
-    def _georef(self):
-        """여덟 칸이 다 차 있으면 변환을 만든다. 비어 있으면 None - 정합을 안 한다.
-
-        값이 이상하면 여기서 세운다. 엉뚱한 자리에 놓인 결과를 주는 것보다
-        왜 안 되는지 말하는 것이 낫다.
-        """
-        if not self.georef_edits:
-            return None
-        values = [edit.text().strip() for edit in self.georef_edits]
-        if not any(values):
-            return None
-        if not all(values):
-            raise ValueError(tr("Fill in all eight reference numbers, or leave them all empty."))
-
-        from ..pro import georef
-
-        return georef.solve((values[0], values[1]), (values[2], values[3]),
-                            (values[4], values[5]), (values[6], values[7]))
 
     def _close_tolerance(self) -> float:
         """비어 있거나 숫자가 아니면 0 - 기능을 끈다. 여기서 오류를 띄우지 않는다."""
@@ -397,12 +422,18 @@ class ImportDialog(QDialog):
         if widget is None:
             return 0.0
         try:
-            return max(float(widget.text().strip()), 0.0)
+            return max(float(widget.text().strip().replace(",", ".")), 0.0)   # 소수점 허용(0.5, 0,5)
         except ValueError:
             return 0.0
 
+    # ---- 레이어 이름 규칙 --------------------------------------------------------------
+    # 예전에는 매핑 프로파일(JSON) 파일을 메모장으로 고쳐 골랐다. 사람이 하는 일인데 사람이 하기
+    # 어려웠다(2026-09-23 지시). 이제 저장해 둔 규칙을 이름으로 고르고, [편집…] 에서 도면 레이어를
+    # 오른쪽 새 이름에 넣어 만든다(pro/layer_rules_dialog.py). 저장 형식은 같은 JSON 이다.
+    _FROM_FILE = "\0file"
+
     def _profile_row(self, layout):
-        """매핑 프로파일 선택. 무료판에는 그리되 잠가 둔다."""
+        """레이어 이름 규칙 고르기와 편집. 무료판에는 그리되 잠가 둔다."""
         try:
             from ..pro import profile as profiles
 
@@ -410,64 +441,177 @@ class ImportDialog(QDialog):
         except ImportError:
             # 무료판. 칸은 그리되 눌리지 않게 둔다 - 있는 줄 알아야 산다.
             self._profiles = None
+        self._layers_cache: tuple[str, float, dict] | None = None   # (경로, 수정 시각, drawing_info)
 
-        layout.addWidget(QLabel(tr("Mapping profile (optional)")))
         row = QHBoxLayout()
-        self.profile_edit = QLineEdit()
-        self.profile_edit.setPlaceholderText(tr("Rule file that maps CAD layer names onto your GIS schema"))
-        pick = QPushButton(tr("Open…"))
-        pick.clicked.connect(self._browse_profile)
-        make = QPushButton(tr("Create example…"))
-        make.clicked.connect(self._write_example_profile)
-        self.profile_buttons = [pick, make]
-        row.addWidget(self.profile_edit)
-        row.addWidget(pick)
-        row.addWidget(make)
-        layout.addLayout(row)
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(300)
+        self.profile_combo.activated.connect(self._profile_chosen)
+        self.profile_combo.currentIndexChanged.connect(self._refresh_rule_summary)
+        edit = QPushButton(tr("Edit…"))
+        edit.clicked.connect(self._edit_rules)
+        self.profile_buttons = [edit]
+        row.addWidget(self.profile_combo, 1)
+        row.addWidget(edit)
+        # 위의 칸들과 같은 모양(왼쪽 라벨)으로 둔다
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._rules_label = QLabel(tr("Layer names"))
+        form.addRow(self._rules_label, row)
+        # 고른 규칙이 이 도면에서 어떻게 되는지 한 줄("16개 → 14개로 가져옴")
+        self.rule_summary = QLabel("")
+        self.rule_summary.setObjectName("pill")
+        self.rule_summary.setStyleSheet(
+            "QLabel#pill { background: rgba(76,141,255,40); color: palette(link); "
+            "border-radius: 9px; padding: 2px 9px; }")
+        self.rule_summary.setVisible(False)
+        form.addRow("", self.rule_summary)
+        layout.addLayout(form)
+        self._fill_profiles()
 
-    def _browse_profile(self):
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, tr("Choose mapping profile"), "", tr("Profile (*.json)")
-        )
-        if chosen:
-            self.profile_edit.setText(chosen)
+    def _show_advanced(self, shown: bool):
+        self.advanced_toggle.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+        self.advanced.setVisible(shown)
 
-    def _write_example_profile(self):
-        """규칙을 손으로 짜기 전에 형태를 보여 준다. 편집은 텍스트 에디터로 한다."""
-        if self._profiles is None:      # 무료판 - 버튼이 잠겨 있어 여기 오지 않는다
+    def _fill_profiles(self, select: str = ""):
+        combo = self.profile_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(tr("As in the drawing"), "")
+        for name in (self._profiles.list_saved() if self._profiles is not None else []):
+            combo.addItem(name, name)
+        combo.insertSeparator(combo.count())
+        combo.addItem(tr("Open a rules file…"), self._FROM_FILE)
+        index = combo.findData(select) if select else 0
+        combo.setCurrentIndex(max(index, 0))
+        combo.blockSignals(False)
+        self._refresh_rule_summary()
+
+    def _profile_chosen(self, index):
+        """'파일 불러오기' 를 고르면 JSON 을 읽어 이름 붙여 저장해 두고 그것을 고른다."""
+        if self.profile_combo.itemData(index) != self._FROM_FILE:
             return
-        chosen, _ = QFileDialog.getSaveFileName(
-            self, tr("Save example profile"), "echocad-profile.json", tr("Profile (*.json)")
-        )
+        chosen, _ = QFileDialog.getOpenFileName(self, tr("Open a rules file"), "", tr("Rules (*.json)"))
         if not chosen:
+            self.profile_combo.setCurrentIndex(0)
             return
-        example = self._profiles.MappingProfile(
-            name=tr("Example"),
-            description=tr("match is a glob pattern. The first rule that matches wins."),
-            rules=[
-                self._profiles.Rule(match="A-WALL-*", layer_name="building_wall", geometry="polygon"),
-                self._profiles.Rule(match="*-TEXT", layer_name="annotation", geometry="point"),
-            ],
-        )
         try:
-            self._profiles.save(example, Path(chosen))
-        except OSError as err:
-            QMessageBox.warning(self, tr("Could not save"), str(err))
+            loaded = self._profiles.load(Path(chosen))
+            self._profiles.save_named(loaded)
+        except (self._profiles.ProfileError, OSError) as err:
+            QMessageBox.warning(self, tr("Profile error"), str(err))
+            self.profile_combo.setCurrentIndex(0)
             return
-        self.profile_edit.setText(chosen)
+        self._fill_profiles(select=loaded.name)
 
-    def _load_profile(self):
-        """선택된 프로파일. 없으면 None, 형식이 틀리면 알리고 None."""
-        if self.profile_edit is None or self._profiles is None:
+    def _chosen_rules(self):
+        """고른 규칙(없으면 None). 읽을 수 없으면 알리고 None."""
+        if self._profiles is None:
             return None
-        text = self.profile_edit.text().strip()
-        if not text:
+        name = self.profile_combo.currentData()
+        if not name or name == self._FROM_FILE:
             return None
         try:
-            return self._profiles.load(Path(text))
+            return self._profiles.load_named(name)
         except self._profiles.ProfileError as err:
             QMessageBox.warning(self, tr("Profile error"), str(err))
             return None
+
+    def _engine_for(self, source: str):
+        """(쓸 수 있나, 변환기 경로). DXF 는 변환기가 필요 없다."""
+        if engine is None or Path(source).suffix.lower() == ".dxf":
+            return True, None
+        try:
+            return True, resolve_engine()
+        except engine.EngineNotFound:
+            if EngineSetupDialog(self).exec() != QDialog.DialogCode.Accepted:
+                return False, None
+            try:
+                # 설정 직후에도 실패할 수 있다 — 네트워크 드라이브나 USB가 빠지는 경우.
+                return True, resolve_engine()
+            except engine.EngineNotFound as err:
+                QMessageBox.warning(self, tr("No converter"), str(err))
+                return False, None
+
+    def _drawing_info(self, source: str, exe=None) -> dict:
+        """고른 도면의 레이어와 단위. 같은 파일이면 한 번만 읽는다(DWG 는 변환이 몇 초 걸린다)."""
+        path = Path(source)
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            return {"layers": [], "units": None}
+        if self._layers_cache and self._layers_cache[:2] == (str(path), stamp):
+            return self._layers_cache[2]
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            info = importer.drawing_info(path, exe=exe)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._layers_cache = (str(path), stamp, info)
+        return info
+
+    def _drawing_layers(self, source: str, exe=None) -> list:
+        return self._drawing_info(source, exe)["layers"]
+
+    def _drawing_is_metric(self) -> bool:
+        """고른 도면이 미터법인가. 아직 못 읽었으면 미터법으로 본다 - CAD 도면의 대부분이다."""
+        cache = self._layers_cache
+        if cache is None:
+            return True
+        return (cache[2].get("units") or 4) not in _IMPERIAL_UNITS
+
+    def _refresh_crs_warning(self, *_):
+        """도 단위 좌표계에 미터 도면을 넣으려 하면 알린다. 도면을 새로 읽지는 않는다."""
+        label = getattr(self, "crs_warning", None)
+        if label is None:
+            return
+        crs = self.crs_widget.crs()
+        label.setVisible(bool(crs.isValid() and crs.isGeographic() and self._drawing_is_metric()))
+
+    def _edit_rules(self):
+        if self._profiles is None:      # 무료판 - 버튼이 잠겨 있어 여기 오지 않는다
+            return
+        source = self.source_edit.text().strip()
+        if not source or not Path(source).is_file():
+            QMessageBox.information(self, tr("No file"), tr("Choose the drawing first - the rules are made from its layers."))
+            return
+        ok, exe = self._engine_for(source)
+        if not ok:
+            return
+        layers = self._drawing_layers(source, exe)
+        if not layers:
+            QMessageBox.warning(self, tr("Could not read the layers"),
+                                tr("The layers of this drawing could not be read."))
+            return
+        from ..pro.layer_rules_dialog import LayerRulesDialog
+
+        dialog = LayerRulesDialog(layers, self._chosen_rules(), Path(source).name, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_name:
+            self._fill_profiles(select=dialog.saved_name)
+
+    def _refresh_rule_summary(self, *_):
+        """고른 규칙이 이 도면에서 어떻게 되는지 한 줄로. 레이어를 이미 읽은 도면에서만."""
+        label = getattr(self, "rule_summary", None)
+        if label is None:
+            return
+        source = self.source_edit.text().strip() if hasattr(self, "source_edit") else ""
+        cache = self._layers_cache
+        if source.lower().endswith(".dxf") and Path(source).is_file() and self._profiles is not None \
+                and (cache is None or cache[0] != str(Path(source))):
+            self._drawing_layers(source)          # DXF 는 바로 읽힌다 - 변환이 필요 없다
+            cache = self._layers_cache
+        if not source or cache is None or cache[0] != str(Path(source)):
+            label.setVisible(False)
+            return
+        from ..pro.layer_rules import LayerRulesModel
+
+        model = LayerRulesModel.from_profile(cache[2]["layers"], self._chosen_rules())
+        total, out, off = model.summary()
+        label.setText(tr("{total} drawing layers → {out} layers to import").format(total=total, out=out)
+                      + (" · " + tr("{n} left out").format(n=off) if off else ""))
+        label.setVisible(True)
+        self._refresh_crs_warning()      # 단위를 읽었으니 좌표계 경고를 다시 본다
 
     def _browse_source(self):
         # 무료판도 DWG 를 고를 수 있게 둔다. 고르고 나서 거절당하는 자리가 곧 영업
@@ -478,13 +622,6 @@ class ImportDialog(QDialog):
         chosen, _ = QFileDialog.getOpenFileName(self, title, "", wanted)
         if chosen:
             self.source_edit.setText(chosen)
-            if not self.output_edit.text():
-                self.output_edit.setText(str(Path(chosen).with_suffix(".gpkg")))
-
-    def _browse_output(self):
-        chosen, _ = QFileDialog.getSaveFileName(self, tr("Save GeoPackage"), "", "GeoPackage (*.gpkg)")
-        if chosen:
-            self.output_edit.setText(chosen)
 
     def _cancel(self):
         if self._feedback is not None:
@@ -497,21 +634,17 @@ class ImportDialog(QDialog):
         if not source:
             QMessageBox.warning(self, tr("No file"), tr("Choose the drawing to import."))
             return
+        if not Path(source).is_file():
+            # 없는 경로를 그대로 변환기에 넘기면 "변환에 실패했습니다 / READ ERROR 0x1000"
+            # 이라는, 사용자가 알 수 없는 오류가 뜬다. 경로를 손으로 고치다 한 글자
+            # 틀리는 일은 흔하다(2026-09-25 구매자 점검에서 실제로 그렇게 막혔다).
+            QMessageBox.warning(self, tr("No file"),
+                                tr("There is no file at {path}").format(path=source))
+            return
 
-        exe = None
-        # DXF 는 변환기를 안 탄다. 무료판에는 변환기가 아예 없다.
-        if engine is not None and Path(source).suffix.lower() != ".dxf":
-            try:
-                exe = resolve_engine()
-            except engine.EngineNotFound:
-                if EngineSetupDialog(self).exec() != QDialog.DialogCode.Accepted:
-                    return
-                try:
-                    # 설정 직후에도 실패할 수 있다 — 네트워크 드라이브나 USB가 빠지는 경우.
-                    exe = resolve_engine()
-                except engine.EngineNotFound as err:
-                    QMessageBox.warning(self, tr("No converter"), str(err))
-                    return
+        ok, exe = self._engine_for(source)
+        if not ok:
+            return
 
         if not self.crs_widget.crs().isValid():
             # 좌표계 없이 만들면 레이어가 다른 데이터와 맞지 않는 자리에 놓인다.
@@ -520,13 +653,13 @@ class ImportDialog(QDialog):
                                 tr("Choose the coordinate system of the drawing."))
             return
 
-        output = Path(self.output_edit.text().strip()) if self.save_check.isChecked() else None
-        if self.save_check.isChecked() and not self.output_edit.text().strip():
-            QMessageBox.warning(self, tr("No save location"), tr("Set the GeoPackage path."))
-            return
-
         self.progress.setVisible(True)
-        self.progress.setValue(0)
+        # DWG 는 여기서부터 변환기가 도는데 그 구간에는 진행 보고가 없다. 얼마나 걸릴지
+        # 모르니 지나가는 막대로 두고, 한 번 processEvents 를 돌려 막대가 실제로 그려지게
+        # 한다. 이게 없으면 제일 오래 걸리는 구간 내내 화면에 아무것도 안 보인다
+        # (2026-09-25 "가져올 때 왜 프로그레스바가 없나").
+        self.progress.setRange(0, 0)
+        QApplication.processEvents()
         self._feedback = _DialogFeedback(self.progress)
         # 진행률 표시가 processEvents를 부르므로 확인 버튼을 잠그지 않으면
         # 변환 중에 또 눌러 두 번째 임포트가 겹쳐 시작된다. 취소는 살려 둔다.
@@ -534,13 +667,12 @@ class ImportDialog(QDialog):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             result, layers = importer.import_dwg(
-                Path(source), output_gpkg=output,
+                Path(source), output_gpkg=None,
                 crs=self.crs_widget.crs().authid() or None,
                 exe=exe, feedback=self._feedback,
-                profile=self._load_profile(),
+                profile=self._chosen_rules(),
                 join_text=bool(self.text_check and self.text_check.isChecked()),
-                close_tolerance=self._close_tolerance(),
-                georef=self._georef(),
+                close_tolerance_mm=self._close_tolerance(),
                 keep_z=bool(getattr(self, "z_check", None) and self.z_check.isChecked()),
                 skip_hidden=self.hidden_check.isChecked(),
             )
@@ -565,6 +697,11 @@ class ImportDialog(QDialog):
             QMessageBox.warning(self, tr("Import failed"), body)
             return
 
+        # 한 번 가져온 레이어들을 한 묶음으로 표시한다 - '지도에 맞추기' 가 이 묶음을 함께 옮긴다
+        import_id = uuid.uuid4().hex[:12]
+        for layer in layers:
+            layer.setCustomProperty(DRAWING_KEY, result.file)
+            layer.setCustomProperty(IMPORT_KEY, import_id)
         QgsProject.instance().addMapLayers(layers)
         _hide_attribute_layers(layers)
         _show_drawing(result.view_extent)
@@ -578,8 +715,87 @@ class ImportDialog(QDialog):
                     if len(result.unmatched_layers) > 8 else "")
             lines.append("\n" + tr("CAD layers no profile rule matched")
                          + f" — {shown}{more}")
-        QMessageBox.information(self, tr("Import finished"), "\n".join(lines))
+        solids = [l for l in layers if "3DSOLID" in l.name()]
+        if solids:
+            # 솔리드는 2D 지도에 바로 얹지 않는다. 3D 창에서 돌려 각도를 정하고 '이 각도로
+            # 가져오기'로 확정하면 그때 그 각도의 평면 도형이 지도에 얹힌다(2026-09-22).
+            #
+            # 다만 **무조건 열지 않는다.** 평면 도형만 필요한 사람도 있고, 원본 솔리드
+            # 레이어가 지도에 남아 뽑은 평면과 겹쳐 보이는 원인이었다 - 가져올 때 고르게
+            # 한다(2026-09-25 지시 "사용자에게 선택하도록 해야지").
+            root = QgsProject.instance().layerTreeRoot()
+            for solid in solids:
+                node = root.findLayer(solid.id())
+                if node is not None:
+                    node.setItemVisibilityChecked(False)
+                # 3D 각도 가져오기 보고서가 어느 도면에서 왔는지 알 수 있게 적어 둔다
+                solid.setCustomProperty("echocad/source_file", result.file)
+            self._show_report(result, lines)
+            turn_it = self._ask_about_solids(len(solids))
+            self.accept()
+            if not turn_it:
+                # 평면만 원한다 - 3D 창의 재료로만 쓰던 원본을 지도에서 뺀다.
+                QgsProject.instance().removeMapLayers([s.id() for s in solids])
+                self._start_align()
+                return
+            from qgis.utils import iface
+
+            from . import view3d
+
+            view3d.open_3d_view(iface, self.parent())
+            return
+        self._show_report(result, lines)
         self.accept()
+        self._start_align()
+
+    def _ask_about_solids(self, count: int) -> bool:
+        """3차원 솔리드가 있을 때 어떻게 가져올지 묻는다. 3차원으로 보겠다면 True.
+
+        돌려서 각도를 정해 평면으로 뽑는 것이 이 도면의 값어치지만, 평면 도형만 필요한
+        사람에게는 군더더기다. 무엇보다 원본 솔리드 레이어가 지도에 남아 뽑은 평면과
+        겹쳐 보였다(2026-09-25 지적).
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("EchoCad — 3D solids"))
+        box.setText(tr("This drawing has {count} 3D solids.").format(count=count))
+        box.setInformativeText(tr(
+            "Turn the model and take a flat drawing from the angle you like, or bring in "
+            "the flat shapes only."))
+        turn = box.addButton(tr("Turn it in 3D"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(tr("Flat shapes only"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(turn)
+        box.exec()
+        return box.clickedButton() is turn
+
+    def _start_align(self):
+        """보고서를 닫으면 지도에 맞추기를 이어서 연다.
+
+        가져오기는 레이어가 만들어진 데서 끝나지 않는다 - 도면이 지도 위 제자리에 놓여야
+        쓸 수 있는 데이터가 된다(2026-09-25 지시 "정확하게 맞추는 작업까지가 임포트의 끝").
+        메뉴로 찾아 들어가게 두면 순서가 뒤집힌다. 맞추기 창의 [닫기] 가 이 흐름의 끝이다.
+
+        Pro 에만 있다(Community 에는 pro/ 폴더가 없다). 없으면 조용히 넘긴다.
+        """
+        try:
+            from ..pro import align_tool
+        except ImportError:
+            return
+        from qgis.utils import iface
+
+        # 창 없이(시험·배치) 도는 자리에서는 iface 가 없다. 지도가 없으면 맞출 것도 없다.
+        if iface is None:
+            return
+        align_tool.start(iface)
+
+    def _show_report(self, result, lines) -> None:
+        """완료 알림 대신 가져오기 보고서(도면에 있는 것 / 가져온 것 / 빠진 것과 이유)."""
+        if not result.report:
+            QMessageBox.information(self, tr("Import finished"), "\n".join(lines))
+            return
+        result.report["notes"] = [line.strip() for line in lines[1:] if line.strip()]
+        from . import report_dialog
+
+        report_dialog.show(result.report, result.excerpt, self)
 
 
 def _show_drawing(bounds) -> None:
