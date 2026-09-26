@@ -1368,7 +1368,8 @@ def _grid_pieces(surf, region):
             if piece.isEmpty() or piece.area() < cell.area() * 1e-6:
                 continue
             for part in piece.asGeometryCollection() if piece.isMultipart() else [piece]:
-                if QgsWkbTypes.geometryType(part.wkbType()) != QgsWkbTypes.PolygonGeometry:
+                if QgsWkbTypes.geometryType(part.wkbType()) != \
+                        QgsWkbTypes.GeometryType.PolygonGeometry:
                     continue                      # 경계에 스친 선·점
                 rings = part.asPolygon()
                 if not rings or len(rings[0]) < 4:

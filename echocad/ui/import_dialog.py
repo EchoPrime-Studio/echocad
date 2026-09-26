@@ -715,7 +715,7 @@ class ImportDialog(QDialog):
                     if len(result.unmatched_layers) > 8 else "")
             lines.append("\n" + tr("CAD layers no profile rule matched")
                          + f" — {shown}{more}")
-        solids = [l for l in layers if "3DSOLID" in l.name()]
+        solids = [layer for layer in layers if "3DSOLID" in layer.name()]
         if solids:
             # 솔리드는 2D 지도에 바로 얹지 않는다. 3D 창에서 돌려 각도를 정하고 '이 각도로
             # 가져오기'로 확정하면 그때 그 각도의 평면 도형이 지도에 얹힌다(2026-09-22).

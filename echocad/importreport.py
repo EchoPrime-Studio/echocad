@@ -98,7 +98,7 @@ def _meta(extra: dict | None = None) -> dict:
         from qgis.core import Qgis
         meta["qgis"] = Qgis.version()
     except Exception:
-        pass
+        meta["qgis"] = ""       # QGIS 밖에서 돌 때. 빈 값으로 두고 계속한다
     try:
         from pathlib import Path
         text = (Path(__file__).resolve().parent / "metadata.txt").read_text(encoding="utf-8")
@@ -108,7 +108,7 @@ def _meta(extra: dict | None = None) -> dict:
             if line.startswith("name="):
                 meta["edition"] = line.split("=", 1)[1].strip()
     except OSError:
-        pass
+        meta["plugin"] = ""     # metadata.txt 를 못 읽으면 판 번호만 빈 값으로 둔다
     meta.update(extra or {})
     return meta
 
