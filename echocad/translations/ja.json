@@ -201,7 +201,7 @@
   "Picture saved": "画像を保存しました",
   "PNG picture (*.png)": "PNG 画像 (*.png)",
   "polygon closing": "面にする処理",
-  "Polygon tolerance (0: do not close polylines)": "面にする許容差（0 ならポリラインを閉じない）",
+  "Polygon tolerance in drawing units (0: do not close polylines)": "面にする許容差（図面単位、0 で閉じない）",
   "Polygon tolerance (optional)": "面にする許容差（任意）",
   "Pro adds:\n\n  ✓ DWG drawings opened directly — R14 to 2018, offline\n  ✓ 3D solids — faces with their curved surfaces and holes\n  ✓ 3D view — turn the model, then take a flat drawing from that angle\n  ✓ Elevations, text, block attributes, georeference, whole folders\n\n{url}": "Pro が追加するもの:\n\n  ✓ DWG 図面を直接開く — R14〜2018、オフライン\n  ✓ 3Dソリッド — 曲面と穴まで含めた面\n  ✓ 3D 表示 — 回した角度のまま平面図を書き出し\n  ✓ 高さ、文字、ブロック属性、実座標合わせ、フォルダ一括\n\n{url}",
   "Pro features": "Pro 機能",

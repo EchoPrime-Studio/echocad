@@ -85,6 +85,9 @@ KIND_REASON = {
 
 # 우리 잘못이 아니거나 사용자가 고른 것 - '빠짐' 이 아니라 '뺌' 으로 센다.
 BY_CHOICE = {"hidden", "infinite", "external", "excluded"}
+# 원래 그릴 것이 없는 자리 - 빠진 것이 아니므로 '가져옴' 으로 센다. 목록에는 이유와 함께
+# 남긴다. 빨간 '빠짐' 으로 세면서 "빠진 것이 아닙니다" 라고 적어 모순이었다(2026-09-27 점검).
+NOTHING_TO_DRAW = {"block_empty"}
 
 
 def reason_text(code: str) -> tuple[str, str, str]:
@@ -137,17 +140,19 @@ def build_import_report(file_name: str, census, imported_handles, *, hidden_laye
         else:
             code = _block_reason(census, e) or KIND_REASON.get(e.kind, "unreadable")
         missing.append({"handle": e.handle, "kind": e.kind, "layer": e.layer, "reason": code})
-    lost = [m for m in missing if m["reason"] not in BY_CHOICE]
+    lost = [m for m in missing if m["reason"] not in BY_CHOICE | NOTHING_TO_DRAW]
+    empty = Counter(m["kind"] for m in missing if m["reason"] in NOTHING_TO_DRAW)
     rows = []
     for kind, n in sorted(kinds_in.items(), key=lambda kv: (-kv[1], kv[0])):
-        rows.append({"kind": kind, "in_drawing": n, "imported": kinds[kind],
+        rows.append({"kind": kind, "in_drawing": n, "imported": kinds[kind] + empty[kind],
                      "missing": sum(1 for m in lost if m["kind"] == kind),
                      "skipped": sum(1 for m in missing if m["kind"] == kind and m["reason"] in BY_CHOICE)})
     by_reason = Counter(m["reason"] for m in missing)
     return {
         "schema": SCHEMA, "type": "import", "file": file_name,
-        "totals": {"in_drawing": len(census.entities), "imported": len(census.entities) - len(missing),
-                   "missing": len(lost), "skipped": len(missing) - len(lost),
+        "totals": {"in_drawing": len(census.entities),
+                   "imported": len(census.entities) - len(missing) + sum(empty.values()),
+                   "missing": len(lost), "skipped": len(missing) - len(lost) - sum(empty.values()),
                    "layers": layers, "features": features, "dropped_geometries": dropped},
         "kinds": rows,
         "reasons": dict(by_reason),
@@ -182,7 +187,8 @@ def build_angle_report(file_name: str, report3d: dict, heading: float, pitch: fl
 def missing_handles(report: dict, include_choice: bool = False) -> list[str]:
     """첨부로 잘라 낼 핸들. 사용자가 고른 뺌(숨긴 도면층 등)은 보내지 않는다."""
     return [m["handle"] for m in report.get("missing", [])
-            if m.get("handle") and (include_choice or m["reason"] not in BY_CHOICE)]
+            if m.get("handle") and m["reason"] not in NOTHING_TO_DRAW
+            and (include_choice or m["reason"] not in BY_CHOICE)]
 
 
 def to_html(report: dict) -> str:

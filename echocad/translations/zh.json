@@ -201,7 +201,7 @@
   "Picture saved": "图片已保存",
   "PNG picture (*.png)": "PNG 图片 (*.png)",
   "polygon closing": "闭合成面",
-  "Polygon tolerance (0: do not close polylines)": "成面容差（0 表示不闭合多段线）",
+  "Polygon tolerance in drawing units (0: do not close polylines)": "成面容差（图纸单位，0 表示不闭合）",
   "Polygon tolerance (optional)": "成面容差（可选）",
   "Pro adds:\n\n  ✓ DWG drawings opened directly — R14 to 2018, offline\n  ✓ 3D solids — faces with their curved surfaces and holes\n  ✓ 3D view — turn the model, then take a flat drawing from that angle\n  ✓ Elevations, text, block attributes, georeference, whole folders\n\n{url}": "Pro 还能增加：\n\n  ✓ 直接打开 DWG 图纸 — R14 至 2018，离线\n  ✓ 三维实体 — 含曲面与孔洞的面\n  ✓ 3D 视图 — 旋转模型并按该角度导出平面图\n  ✓ 高程、文字、块属性、地理配准、文件夹批量\n\n{url}",
   "Pro features": "Pro 功能",

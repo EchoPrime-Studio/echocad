@@ -201,7 +201,7 @@
   "Picture saved": "Imagem guardada",
   "PNG picture (*.png)": "Imagem PNG (*.png)",
   "polygon closing": "fecho de polígonos",
-  "Polygon tolerance (0: do not close polylines)": "Tolerância de polígono (0: não fechar polilinhas)",
+  "Polygon tolerance in drawing units (0: do not close polylines)": "Tolerância de polígono em unidades do desenho (0: não fechar polilinhas)",
   "Polygon tolerance (optional)": "Tolerância de polígono (opcional)",
   "Pro adds:\n\n  ✓ DWG drawings opened directly — R14 to 2018, offline\n  ✓ 3D solids — faces with their curved surfaces and holes\n  ✓ 3D view — turn the model, then take a flat drawing from that angle\n  ✓ Elevations, text, block attributes, georeference, whole folders\n\n{url}": "O Pro acrescenta:\n\n  ✓ Desenhos DWG abertos diretamente — R14 a 2018, offline\n  ✓ Sólidos 3D — faces com superfícies curvas e furos\n  ✓ Vista 3D — girar o modelo e extrair um desenho plano desse ângulo\n  ✓ Cotas Z, texto, atributos de bloco, georreferenciação, pastas\n\n{url}",
   "Pro features": "Funcionalidades Pro",

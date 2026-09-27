@@ -48,6 +48,7 @@ try:
 except ImportError:      # 무료판
     engine = None
 from .i18n import tr
+from .links import PRO_PAGE_URL as _PRO_PAGE_URL
 from .links import PRO_URL as _PRO_URL
 from .gdalopts import dxf_options
 
@@ -866,7 +867,7 @@ def _solids_note(count: int) -> str:
         return ""
     return (tr("3D solids in this drawing: {count}. EchoCad Pro brings them in "
                "with their curved surfaces.").format(count=count)
-            + " " + _PRO_URL)
+            + " " + _PRO_PAGE_URL)
 
 
 def _entity_counts(path: Path) -> dict[str, int]:

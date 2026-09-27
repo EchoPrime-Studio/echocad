@@ -206,7 +206,7 @@
   "Picture saved": "그림 저장함",
   "PNG picture (*.png)": "PNG 그림 (*.png)",
   "polygon closing": "면 만들기",
-  "Polygon tolerance (0: do not close polylines)": "면으로 만들 허용오차 (0이면 닫지 않음)",
+  "Polygon tolerance in drawing units (0: do not close polylines)": "면으로 만들 허용오차, 도면 단위 (0이면 닫지 않음)",
   "Polygon tolerance (optional)": "면으로 만들 허용오차 (선택)",
   "Pro adds:\n\n  ✓ DWG drawings opened directly — R14 to 2018, offline\n  ✓ 3D solids — faces with their curved surfaces and holes\n  ✓ 3D view — turn the model, then take a flat drawing from that angle\n  ✓ Elevations, text, block attributes, georeference, whole folders\n\n{url}": "Pro 는 이것을 더합니다.\n\n  ✓ DWG 도면을 바로 열기 — R14~2018, 오프라인\n  ✓ 3차원 솔리드 — 곡면과 구멍까지 살린 면\n  ✓ 3차원 보기 — 돌린 각도 그대로 평면 도면 뽑기\n  ✓ 높이·문자·블록 속성·실좌표·폴더 일괄\n\n{url}",
   "Pro features": "Pro 기능",

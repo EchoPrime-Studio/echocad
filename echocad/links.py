@@ -7,5 +7,9 @@
 # 무료판(Community 빌드)도 이 모듈을 쓴다. 그래서 pro/ 폴더가 없어도 살아 있어야 하고,
 # 빌드의 자리표시자 치환에 기대면 안 된다(치환은 pro 빌드에만 돈다).
 
-# Pro 안내와 구매 안내가 가리키는 곳.
+# 이미 산 사람이 키와 설치 파일을 다시 받는 곳("이미 Pro 를 사셨습니까?").
 PRO_URL = "https://echocad.pages.dev/key"
+# 아직 안 산 사람에게 Pro 를 보여 주는 곳. 한때 이것도 /key 였는데, "Pro 살펴보기" 를
+# 누른 사람이 주문번호 입력 칸을 만났다(2026-09-27 구매자 점검).
+PRO_PAGE_URL = "https://echocad.pages.dev/"
+BUY_PAGE_URL = "https://echocad.pages.dev/buy"

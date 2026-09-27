@@ -10,7 +10,7 @@ from qgis.PyQt.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QPushButton,
                                  QVBoxLayout)
 
 from ..i18n import tr
-from ..links import PRO_URL as BUY_URL
+from ..links import BUY_PAGE_URL as BUY_URL
 
 # 한 덩어리로 둔다. 항목마다 tr() 을 걸면 번역할 문장이 아홉 배로 늘어난다.
 _FEATURES = tr(

@@ -18,7 +18,7 @@ from qgis.PyQt.QtWidgets import (
 from .. import importer
 from ..i18n import tr
 from ..importer import DRAWING_KEY, IMPORT_KEY
-from ..links import PRO_URL
+from ..links import PRO_PAGE_URL
 
 # 변환 엔진은 무료판 빌드에 없다. 무료판은 DXF 만 읽으므로 엔진을 찾을 일도,
 # 설정 화면을 띄울 일도 없다.
@@ -237,7 +237,16 @@ class ImportDialog(QDialog):
         self.pro_see = QPushButton(tr("See Pro"))
         self.pro_see.clicked.connect(self._open_pro)
         self.pro_see.setVisible(False)
-        pro.addWidget(self.pro_see, alignment=Qt.AlignmentFlag.AlignLeft)
+        # 유료판을 깔고 키를 아직 안 넣은 사람이 할 일은 키 넣기다. 이 단추가 없으면
+        # 산 사람에게 "Pro 살펴보기" 만 보여 다시 사라고 하는 것처럼 읽혔다(2026-09-27 점검).
+        self.pro_key = QPushButton(tr("Licence…"))
+        self.pro_key.clicked.connect(self._open_license)
+        self.pro_key.setVisible(False)
+        see_row = QHBoxLayout()
+        see_row.addWidget(self.pro_key)
+        see_row.addWidget(self.pro_see)
+        see_row.addStretch(1)
+        pro.addLayout(see_row)
 
         # 실제 조작 칸. 잠기면 통째로 감춘다.
         self._pro_locked = False       # _lock_pro_widgets 가 정한다
@@ -325,12 +334,21 @@ class ImportDialog(QDialog):
             self.pro_note.setVisible(False)
             self.pro_count.setVisible(False)
             self.pro_see.setVisible(False)
+            self.pro_key.setVisible(False)
             self.pro_controls.setVisible(True)
+            for name in ("profile_combo", "text_check", "z_check", "close_edit"):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.setEnabled(True)
+                    widget.setToolTip("")
+            for button in (getattr(self, "profile_buttons", None) or []):
+                button.setEnabled(True)
+                button.setToolTip("")
             self._pro_locked = False
             return
         # 값어치는 두 경우 모두 보여 준다. 만료된 사람에게도 팔아야 한다 -
         # 예전에는 만료자에게 "잠겼습니다" 한 줄만 보여 줘서 살 이유를 못 봤다.
-        hint = _PITCH.format(url=PRO_URL)
+        hint = _PITCH.format(url=PRO_PAGE_URL)
         if pro is None:
             why = tr("EchoCad Pro only")
         else:
@@ -355,17 +373,27 @@ class ImportDialog(QDialog):
         self.pro_box.setTitle(tr("EchoCad Pro"))
         self.pro_box.setFlat(False)
         self._pro_locked = True
-        self.free_note.setVisible(True)
+        # "이 판은 DXF 를 읽습니다" 는 무료판 이야기다. 유료판에서 키만 없을 때 띄우면
+        # 산 것이 무료판인 줄 안다.
+        self.free_note.setVisible(pro is None)
         self.pro_controls.setVisible(False)
         self.pro_note.setVisible(True)
         self.pro_see.setVisible(True)
+        self.pro_key.setVisible(pro is not None)
         self._refresh_pro_count()
+
+    def _open_license(self):
+        """키를 넣으면 이 창을 닫지 않고 그 자리에서 유료 칸을 연다."""
+        from ..pro.license_dialog import LicenseDialog
+
+        LicenseDialog(self).exec()
+        self._lock_pro_widgets()
 
     def _open_pro(self):
         from qgis.PyQt.QtCore import QUrl
         from qgis.PyQt.QtGui import QDesktopServices
 
-        QDesktopServices.openUrl(QUrl(PRO_URL))
+        QDesktopServices.openUrl(QUrl(PRO_PAGE_URL))
 
     def _refresh_pro_count(self):
         """고른 도면의 3차원 솔리드 수를 세어 보여 준다.
@@ -693,6 +721,11 @@ class ImportDialog(QDialog):
             return
         if result.status != "ok":
             detail = tr(_STATUS_MESSAGE.get(result.status, "Could not import it."))
+            if result.status == "unsupported" and engine is None and \
+                    Path(result.file).suffix.lower() == ".dwg":
+                # 무료판이 DWG 를 받은 경우. "R14 이상 DWG 만 읽을 수 있다" 를 앞세우면
+                # R2007 도면을 넣은 사람에게 모순으로 읽혔다(2026-09-27 구매자 점검).
+                detail = tr("EchoCad Pro only")
             body = "\n\n".join(part for part in (detail, result.note) if part)
             QMessageBox.warning(self, tr("Import failed"), body)
             return
@@ -731,7 +764,12 @@ class ImportDialog(QDialog):
                 # 3D 각도 가져오기 보고서가 어느 도면에서 왔는지 알 수 있게 적어 둔다
                 solid.setCustomProperty("echocad/source_file", result.file)
             self._show_report(result, lines)
-            turn_it = self._ask_about_solids(len(solids))
+            # 레이어 수가 아니라 솔리드 수를 센다. 레이어 수를 넣었더니 보고서는 133개인데
+            # 묻는 창은 "1개" 라고 했다(2026-09-27 구매자 점검). 피처는 면 단위라(133 솔리드 →
+            # 575 면) 원본 핸들로 센다.
+            turn_it = self._ask_about_solids(len({
+                str(f["cad_handle"]) for s in solids for f in s.getFeatures()
+                if s.fields().indexOf("cad_handle") >= 0}) or len(solids))
             self.accept()
             if not turn_it:
                 # 평면만 원한다 - 3D 창의 재료로만 쓰던 원본을 지도에서 뺀다.
