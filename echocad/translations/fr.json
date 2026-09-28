@@ -369,5 +369,14 @@
   "The drawing moves there": "Le dessin s'y déplace",
   "The last alignment was undone.": "Le dernier alignement a été annulé.",
   "Undo the last alignment": "Annuler le dernier alignement",
-  "view": "vue"
+  "view": "vue",
+  "Drag the drawing to move it, a corner to resize it, the round handle to turn it.": "Faites glisser le dessin pour le déplacer, un coin pour le redimensionner, la poignée ronde pour le tourner.",
+  "Rotation": "Rotation",
+  "Position": "Position",
+  "Size": "Taille",
+  "Start over": "Recommencer",
+  "By hand": "À la main",
+  "By two points": "Par deux points",
+  "Undo point": "Annuler le point",
+  "Result": "Résultat"
 }

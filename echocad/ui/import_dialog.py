@@ -735,9 +735,14 @@ class ImportDialog(QDialog):
         for layer in layers:
             layer.setCustomProperty(DRAWING_KEY, result.file)
             layer.setCustomProperty(IMPORT_KEY, import_id)
+        # 이미 보던 지도(배경지도·지적도)가 있으면 화면을 도면 쪽으로 옮기지 않는다 - 지도에 맞추기가
+        # 도면을 지금 화면으로 데려온다(2026-09-28 지시 "무조건 지금 화면으로"). 빈 프로젝트이거나
+        # 맞추기가 없는 무료판이면 예전처럼 도면을 보여 준다.
+        keep_view = bool(QgsProject.instance().mapLayers()) and _can_align()
         QgsProject.instance().addMapLayers(layers)
         _hide_attribute_layers(layers)
-        _show_drawing(result.view_extent)
+        if not keep_view:
+            _show_drawing(result.view_extent)
         lines = [tr("Imported {layers} layers and {features} features.").format(
             layers=len(result.layers), features=f"{result.total_features:,}")]
         if result.note:
@@ -834,6 +839,15 @@ class ImportDialog(QDialog):
         from . import report_dialog
 
         report_dialog.show(result.report, result.excerpt, self)
+
+
+def _can_align() -> bool:
+    """지도에 맞추기가 있는 판(Pro)인가."""
+    try:
+        from ..pro import align_tool  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _show_drawing(bounds) -> None:

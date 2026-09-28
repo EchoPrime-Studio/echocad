@@ -1436,7 +1436,9 @@ def _acis_layer(dxf: Path, crs_id: str, taken: set[str], acis_raw: Path | None =
         # AutoCAD 가 쓴 것이면 번호가 스스로 맞고, LibreDWG 가 다시 쓴 것이면 어긋난다.
         # 그래도 옛 걷기(종류로 짐작하는 것)보다 이쪽이 낫다 - 실측 13면/퇴화 4 에서
         # 13면/퇴화 0 이 됐다(2026-09-19, 실제 AutoCAD R2000 DXF).
-        entries = [(handle, "", "",
+        # 도면층·색은 엔티티에 적혀 있다. 비워 두면 솔리드가 모두 한 색으로 나왔다(2026-09-27).
+        styles = {h: (layer, color) for h, layer, color in acis.entity_styles(dxf, len(bodies))}
+        entries = [(handle, *styles.get(handle, ("", "")),
                     [([rings], "", None) for rings in acis.raw_sat_faces("\n".join(lines))])
                    for handle, lines in bodies]
     if not any(e[3] for e in entries):

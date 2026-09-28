@@ -369,5 +369,14 @@
   "The drawing moves there": "图纸会移到该位置",
   "The last alignment was undone.": "已撤销上次对齐。",
   "Undo the last alignment": "撤销上次对齐",
-  "view": "视图"
+  "view": "视图",
+  "Drag the drawing to move it, a corner to resize it, the round handle to turn it.": "拖动图纸可移动，拖动角点可缩放，拖动圆形手柄可旋转。",
+  "Rotation": "旋转",
+  "Position": "位置",
+  "Size": "大小",
+  "Start over": "恢复初始",
+  "By hand": "手动对齐",
+  "By two points": "两点对齐",
+  "Undo point": "撤销一点",
+  "Result": "结果"
 }

@@ -374,5 +374,14 @@
   "The drawing moves there": "도면이 그 자리로 옮겨집니다",
   "The last alignment was undone.": "마지막 맞추기를 되돌렸습니다.",
   "Undo the last alignment": "마지막 맞추기 되돌리기",
-  "view": "뷰"
+  "view": "뷰",
+  "Drag the drawing to move it, a corner to resize it, the round handle to turn it.": "도면 안을 끌면 이동, 모서리 ■ 는 크기, 위쪽 ○ 는 회전입니다.",
+  "Rotation": "회전",
+  "Position": "위치",
+  "Size": "크기",
+  "Start over": "처음 상태로",
+  "By hand": "손으로 맞추기",
+  "By two points": "두 점으로 맞추기",
+  "Undo point": "한 점 취소",
+  "Result": "결과"
 }

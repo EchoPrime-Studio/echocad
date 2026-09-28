@@ -369,5 +369,14 @@
   "The drawing moves there": "図面がその場所へ移動します",
   "The last alignment was undone.": "最後の位置合わせを元に戻しました。",
   "Undo the last alignment": "最後の位置合わせを元に戻す",
-  "view": "ビュー"
+  "view": "ビュー",
+  "Drag the drawing to move it, a corner to resize it, the round handle to turn it.": "図面をドラッグで移動、角で拡大縮小、丸いハンドルで回転します。",
+  "Rotation": "回転",
+  "Position": "位置",
+  "Size": "サイズ",
+  "Start over": "最初の状態に",
+  "By hand": "手で合わせる",
+  "By two points": "2点で合わせる",
+  "Undo point": "1点取り消し",
+  "Result": "結果"
 }

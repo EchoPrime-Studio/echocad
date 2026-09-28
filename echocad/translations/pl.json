@@ -369,5 +369,14 @@
   "The drawing moves there": "Rysunek przesunie się tam",
   "The last alignment was undone.": "Cofnięto ostatnie dopasowanie.",
   "Undo the last alignment": "Cofnij ostatnie dopasowanie",
-  "view": "widok"
+  "view": "widok",
+  "Drag the drawing to move it, a corner to resize it, the round handle to turn it.": "Przeciągnij rysunek, aby go przesunąć, róg — aby zmienić rozmiar, okrągły uchwyt — aby obrócić.",
+  "Rotation": "Obrót",
+  "Position": "Położenie",
+  "Size": "Rozmiar",
+  "Start over": "Od nowa",
+  "By hand": "Ręcznie",
+  "By two points": "Dwoma punktami",
+  "Undo point": "Cofnij punkt",
+  "Result": "Wynik"
 }
